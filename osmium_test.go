@@ -19,9 +19,9 @@ import (
 
 // TestOsmiumDifferential writes diffCorpus as an OSM XML file, runs the
 // osmium binary's tags-filter over it for every diffExpressionSets entry, and
-// requires the surviving object IDs to equal what Filter and the spec's
-// combination formula give. Sets that do not compile must make osmium fail
-// too.
+// requires the surviving object IDs to equal what Filter and the combination
+// formula in the package doc give. Sets that do not compile must make osmium
+// fail too.
 func TestOsmiumDifferential(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipped in -short mode")
@@ -159,8 +159,9 @@ func runOsmium(osmium, file string, exprs []string) (map[string]bool, error) {
 }
 
 // matchLocally returns the objects f matches, named as runOsmium names them,
-// combining Hits with geometry by the spec's formula. Like a decoder, it
-// reads objs in file order and reuses one Matcher, calling Begin per object.
+// combining Hits with geometry by the formula in the package doc. Like a
+// decoder, it reads objs in file order and reuses one Matcher, calling Begin
+// per object.
 func matchLocally(f *Filter, objs []osmObject) map[string]bool {
 	matched := map[string]bool{}
 	m := f.Matcher()

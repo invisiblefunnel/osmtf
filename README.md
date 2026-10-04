@@ -100,8 +100,3 @@ matches are ways and relations.
   matching ways and the members of matching relations. Each object is matched
   on its own, as with `osmium tags-filter -R`.
 - `--invert-match`. Negate the result with `!` at the call site.
-
-## Design
-
-The design, including the osmium semantics as verified from source, is in
-[docs/superpowers/specs/2026-10-04-osm-tag-filter-design.md](docs/superpowers/specs/2026-10-04-osm-tag-filter-design.md).

@@ -6,9 +6,11 @@ import (
 	"testing"
 )
 
-// The reference oracle is written from the spec's "Osmium semantics" section
-// with the strings package on string values. It shares no parsing or matching
-// code with parse.go or match.go, only the matchKind labels.
+// The reference oracle is written from osmium's semantics, as implemented in
+// osmium-tool's src/util.cpp and src/command_tags_filter.cpp and libosmium's
+// tags/matcher.hpp and util/string_matcher.hpp, with the strings package on
+// string values. It shares no parsing or matching code with parse.go or
+// match.go, only the matchKind labels.
 
 // oracleMatcher is the oracle's key or value matcher. pat is set only for
 // matchEqual, matchPrefix, and matchSubstring, and list only for matchList.
@@ -18,7 +20,7 @@ type oracleMatcher struct {
 	list []string
 }
 
-// oracleStringMatcher applies the spec's string matcher construction steps,
+// oracleStringMatcher applies osmium's string matcher construction steps,
 // in order, to a raw key or value.
 func oracleStringMatcher(s string) oracleMatcher {
 	s = strings.Trim(s, " ") // 1: ASCII spaces only
@@ -79,7 +81,7 @@ type oracleRule struct {
 // their groups.
 var oracleTypeLetters = map[byte]Types{'n': Nodes, 'w': Ways, 'r': Relations, 'a': Areas}
 
-// oracleParse parses expr with the spec's grammar, [TYPES/]REST. It returns
+// oracleParse parses expr with osmium's grammar, [TYPES/]REST. It returns
 // the offset of the first byte before the first '/' that is not a type
 // letter, or -1 when expr is valid.
 func oracleParse(expr string) (oracleRule, int) {
