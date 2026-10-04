@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # Ubuntu 26.04 packages osmium-tool 1.19.0, the version README.md cites,
+    # for TestOsmiumDifferential.
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # The minimum from go.mod, and the latest release.
+        go: ['1.22', 'stable']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ matrix.go }}
+      - name: Install osmium-tool
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends osmium-tool
+          osmium --version
+      - name: gofmt
+        run: test -z "$(gofmt -d . | tee /dev/stderr)"
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test -race ./...
