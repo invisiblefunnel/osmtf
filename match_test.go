@@ -255,9 +255,9 @@ func TestZeroAllocs(t *testing.T) {
 	f := MustCompile("n/amenity", "nw/highway", "w/highway!=primary", "r/type=multipolygon,boundary",
 		"w/name,name:de=Kastanienallee,Kastanienstrasse", "n/addr:*", "n/name=*Paris", "a/building")
 	tags := [][2][]byte{
-		{[]byte("highway"), []byte("residential")}, {[]byte("name"), []byte("Main Street")},
-		{[]byte("surface"), []byte("asphalt")}, {[]byte("type"), []byte("multipolygon")},
-		{[]byte("building"), []byte("yes")}, {[]byte("addr:street"), []byte("x")},
+		{[]byte("name"), []byte("Main Street")}, {[]byte("surface"), []byte("asphalt")},
+		{[]byte("type"), []byte("multipolygon")}, {[]byte("building"), []byte("yes")},
+		{[]byte("addr:street"), []byte("x")}, {[]byte("highway"), []byte("residential")},
 	}
 	for _, kind := range []Kind{Node, Way, Relation} {
 		allocs := testing.AllocsPerRun(1000, func() {
