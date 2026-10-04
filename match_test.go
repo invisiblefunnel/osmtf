@@ -1,6 +1,9 @@
 package osmtf
 
-import "testing"
+import (
+	"sync"
+	"testing"
+)
 
 func TestStrMatcherMatch(t *testing.T) {
 	cases := []struct {
@@ -244,4 +247,89 @@ func TestDuplicateKeys(t *testing.T) {
 	if !m.Multipolygon() {
 		t.Fatal("multipolygon flag was cleared by a later type tag")
 	}
+}
+
+var sink Types
+
+func TestZeroAllocs(t *testing.T) {
+	f := MustCompile("n/amenity", "nw/highway", "w/highway!=primary", "r/type=multipolygon,boundary",
+		"w/name,name:de=Kastanienallee,Kastanienstrasse", "n/addr:*", "n/name=*Paris", "a/building")
+	tags := [][2][]byte{
+		{[]byte("highway"), []byte("residential")}, {[]byte("name"), []byte("Main Street")},
+		{[]byte("surface"), []byte("asphalt")}, {[]byte("type"), []byte("multipolygon")},
+		{[]byte("building"), []byte("yes")}, {[]byte("addr:street"), []byte("x")},
+	}
+	for _, kind := range []Kind{Node, Way, Relation} {
+		allocs := testing.AllocsPerRun(1000, func() {
+			m := f.Matcher()
+			m.Begin(kind)
+			for _, tg := range tags {
+				sink |= m.Tag(tg[0], tg[1])
+			}
+			sink |= m.Hits()
+			if m.Multipolygon() {
+				sink |= Areas
+			}
+		})
+		if allocs != 0 {
+			t.Errorf("kind %d: %v allocs per run, want 0", kind, allocs)
+		}
+	}
+}
+
+func TestHitsIndependentOfTagOrder(t *testing.T) {
+	for _, c := range conformance {
+		if len(c.tags) < 2 {
+			continue
+		}
+		f := MustCompile(c.exprs...)
+		reversed := make([][2]string, len(c.tags))
+		for i, tg := range c.tags {
+			reversed[len(c.tags)-1-i] = tg
+		}
+		rotated := append(append([][2]string{}, c.tags[1:]...), c.tags[0])
+		for _, order := range [][][2]string{reversed, rotated} {
+			runCase(t, f, tagCase{c.name + " reordered", c.exprs, c.kind, order, c.hits, c.mp})
+		}
+	}
+}
+
+func TestEarlyStopPreservesBits(t *testing.T) {
+	for _, c := range conformance {
+		m := MustCompile(c.exprs...).Matcher()
+		m.Begin(c.kind)
+		var prev Types
+		for _, tg := range c.tags {
+			r := m.Tag([]byte(tg[0]), []byte(tg[1]))
+			if prev&^r != 0 {
+				t.Errorf("%s: bits %d cleared by a later tag", c.name, prev&^r)
+			}
+			prev = r
+		}
+		if prev&^c.hits != 0 {
+			t.Errorf("%s: early bits %d not in final hits %d", c.name, prev, c.hits)
+		}
+	}
+}
+
+func TestConcurrentMatchers(t *testing.T) {
+	f := MustCompile("n/amenity", "nw/highway", "w/highway!=primary", "a/building", "r/type=multipolygon,boundary")
+	cases := []tagCase{
+		{"node", nil, Node, kv("amenity", "cafe"), Nodes, false},
+		{"way", nil, Way, kv("highway", "secondary", "building", "yes"), Ways | Areas, false},
+		{"relation", nil, Relation, kv("building", "yes", "type", "boundary"), Relations | Areas, true},
+	}
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 200; i++ {
+				for _, c := range cases {
+					runCase(t, f, c)
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }
