@@ -30,6 +30,12 @@ func TestOsmiumDifferential(t *testing.T) {
 	if err != nil {
 		t.Skip("osmium not on PATH")
 	}
+	out, err := exec.Command(osmium, "--version").Output()
+	if err != nil {
+		t.Fatalf("osmium --version: %v", err)
+	}
+	version, _, _ := strings.Cut(string(out), "\n")
+	t.Logf("%s: %s", osmium, version)
 	objs := diffCorpus()
 	file := filepath.Join(t.TempDir(), "corpus.osm")
 	var buf bytes.Buffer

@@ -269,6 +269,7 @@ var sink Types
 func TestZeroAllocs(t *testing.T) {
 	f := MustCompile("n/amenity", "nw/highway", "w/highway!=primary", "r/type=multipolygon,boundary",
 		"w/name,name:de=Kastanienallee,Kastanienstrasse", "n/addr:*", "n/name=*Paris", "a/building")
+	// highway=residential must stay last so every core group keeps scanning and all five match kinds run inside AllocsPerRun.
 	tags := [][2][]byte{
 		{[]byte("name"), []byte("Main Street")}, {[]byte("surface"), []byte("asphalt")},
 		{[]byte("type"), []byte("multipolygon")}, {[]byte("building"), []byte("yes")},
