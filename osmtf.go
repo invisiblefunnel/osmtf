@@ -3,6 +3,15 @@
 // osmium tags-filter command. Matcher is the streaming API: it takes an
 // object's tags one key/value pair at a time, as byte slices, records which
 // rule groups match, and allocates nothing.
+//
+// The caller combines the matched groups with geometry it already knows.
+// With h the Hits of a Matcher m after an object's last tag, n a way's node
+// count, and closed whether the way's first and last node IDs are the same,
+// osmium's result for each kind of object is:
+//
+//	nodeMatches     := h&Nodes != 0
+//	wayMatches      := h&Ways != 0 || (h&Areas != 0 && IsAreaWay(n, closed))
+//	relationMatches := h&Relations != 0 || (h&Areas != 0 && m.Multipolygon())
 package osmtf
 
 import "fmt"
@@ -100,7 +109,11 @@ func MustCompile(exprs ...string) *Filter {
 }
 
 // Types returns the union of the groups any rule applies to, so a decoder
-// can skip object kinds that cannot match.
+// can skip object kinds that cannot match, as osmium does: nodes when
+// Types()&Nodes == 0, ways when Types()&(Ways|Areas) == 0, and relations
+// when Types()&(Relations|Areas) == 0. Areas is a group, not a kind:
+// MustCompile("a/building").Types() is Areas, and its matches are ways and
+// relations.
 func (f *Filter) Types() Types {
 	return f.types
 }
@@ -108,7 +121,7 @@ func (f *Filter) Types() Types {
 // IsAreaWay is osmium's rule for when a way counts as an area. It reports
 // whether the way is closed and has at least 4 nodes, where nodeCount is the
 // length of the way's node list and closed says whether its first and last
-// node are the same.
+// node IDs are the same.
 func IsAreaWay(nodeCount int, closed bool) bool {
 	return closed && nodeCount >= 4
 }

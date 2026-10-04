@@ -71,6 +71,18 @@ var (
 
 // Tag tests one key/value pair and returns the hits so far, identical to
 // what Hits would return. Neither slice is retained.
+//
+// The caller may stop feeding tags early, but then only the bits already set
+// are meaningful: an unset bit, or a false Multipolygon, is final only after
+// every tag. Stop early only once the combination formula in the package doc
+// is already true for the object. Stopping on any hit,
+//
+//	if m.Tag(k, v) != 0 {
+//		break
+//	}
+//
+// loses relations whose type tag comes after the area hit, and open ways
+// whose Areas hit precedes the tag that would hit a way rule.
 func (m *Matcher) Tag(key, value []byte) Types {
 	f := m.f
 	// The core and area groups are each evaluated only while their bit is
@@ -103,7 +115,7 @@ func (m *Matcher) Tag(key, value []byte) Types {
 
 // Hits reports which rule groups have matched since Begin: the kind's own
 // bit (Nodes, Ways, or Relations) for a core hit, and Areas for an area
-// rule hit.
+// rule hit. The package doc shows how to combine them into osmium's result.
 func (m *Matcher) Hits() Types {
 	return m.hits
 }

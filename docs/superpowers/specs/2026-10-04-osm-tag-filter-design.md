@@ -136,6 +136,7 @@ type Matcher struct { /* f *Filter, kind, hits, multipolygon, typeSeen */ }
 func (f *Filter) Matcher() Matcher
 
 // Begin resets the state for a new object of the given kind.
+// It panics with "osmtf: invalid Kind" if kind is not Node, Way, or Relation.
 func (m *Matcher) Begin(kind Kind)
 
 // Tag tests one key/value pair and returns the hits so far, identical to
@@ -218,8 +219,8 @@ type rule struct {
 type Filter struct {
     rules []rule
     blob  []byte      // all pattern bytes, copied once
-    core  [3][]uint16 // rule indices per Kind
-    area  []uint16    // rule indices with the Areas bit
+    core  [3][]uint32 // rule indices per Kind
+    area  []uint32    // rule indices with the Areas bit
     types Types       // union of rule.types
 }
 ```

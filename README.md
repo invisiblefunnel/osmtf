@@ -2,14 +2,14 @@
 
 osmtf is a Go library that matches OpenStreetMap objects against tag filter
 expressions, mirroring the expression language and matching rules of
-`osmium tags-filter`. A differential test that runs the `osmium` binary
-verifies it against osmium-tool 1.19.0. It is built for the hot loop of a PBF
-or XML decoder: expressions are compiled once into a `Filter`, and each
-object's tags are streamed into a `Matcher` one key/value pair at a time, as
-byte slices, with `Tag` returning the hits so far, so the caller can stop
-early. Matching allocates nothing and never retains the caller's slices. A
-`Filter` is immutable and safe to share across goroutines, each with its own
-`Matcher`.
+`osmium tags-filter`. It was verified against osmium-tool 1.19.0 by a
+differential test that runs the `osmium` binary on PATH. It is built for the
+hot loop of a PBF or XML decoder: expressions are compiled once into a
+`Filter`, and each object's tags are streamed into a `Matcher` one key/value
+pair at a time, as byte slices, with `Tag` returning the hits so far, so the
+caller can stop early. Matching allocates nothing and never retains the
+caller's slices. A `Filter` is immutable and safe to share across goroutines,
+each with its own `Matcher`.
 
 ## Install
 
@@ -35,12 +35,31 @@ fmt.Println(h&osmtf.Ways != 0 || (h&osmtf.Areas != 0 && closedWith5Nodes)) // tr
 fmt.Println(h&osmtf.Ways != 0 || (h&osmtf.Areas != 0 && openWith5Nodes))   // false
 
 // In general, osmium's result for each kind of object is as follows, where n
-// is a way's node count and closed says whether its first and last node are
-// the same.
+// is a way's node count and closed says whether its first and last node IDs
+// are the same.
 nodeMatches := h&osmtf.Nodes != 0
 wayMatches := h&osmtf.Ways != 0 || (h&osmtf.Areas != 0 && osmtf.IsAreaWay(n, closed))
 relationMatches := h&osmtf.Relations != 0 || (h&osmtf.Areas != 0 && m.Multipolygon())
 ```
+
+### Stopping early
+
+`Tag` returns the hits so far, so a decoder can stop feeding tags early, but
+then only the bits already set are meaningful: an unset bit, or a false
+`Multipolygon`, is final only after every tag. Stop early only once the
+formula above is already true for the object. Stopping on any hit, as in
+`if m.Tag(k, v) != 0 { break }`, loses relations whose `type` tag comes after
+the area hit, and open ways whose `Areas` hit precedes the tag that would hit
+a way rule.
+
+### Skipping object kinds
+
+`Filter.Types` tells a decoder which kinds of object it may skip, as osmium
+does: nodes when `f.Types()&osmtf.Nodes == 0`, ways when
+`f.Types()&(osmtf.Ways|osmtf.Areas) == 0`, and relations when
+`f.Types()&(osmtf.Relations|osmtf.Areas) == 0`. `Areas` is a rule group, not
+a kind of object: `a/building` alone gives `Types() == osmtf.Areas`, and its
+matches are ways and relations.
 
 ## Semantics
 
@@ -71,8 +90,12 @@ relationMatches := h&osmtf.Relations != 0 || (h&osmtf.Areas != 0 && m.Multipolyg
 
 ## Not in scope
 
-- Expression files (`osmium tags-filter -e`). Read the file yourself and pass
-  its expressions to `Compile`.
+- Expression files (`osmium tags-filter -e`). To read one as osmium does,
+  split it into lines at `\n` and cut each line at its first `#`, even
+  mid-expression (`name=a#b` becomes `name=a`). Skip the line only if nothing
+  is left; otherwise drop one trailing `\r` and pass the rest to `Compile`
+  unchanged. So a line of only spaces, or only `\r`, becomes an empty-key
+  rule, as in osmium.
 - Referenced-object completion, the CLI's default of also writing the nodes of
   matching ways and the members of matching relations. Each object is matched
   on its own, as with `osmium tags-filter -R`.
