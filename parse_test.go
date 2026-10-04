@@ -126,6 +126,8 @@ var compileShapeCases = []struct {
 	{"highway! =primary", ruleShape{nwr, eq("highway!"), eq("primary"), true}},
 	{"highway!", ruleShape{nwr, eq("highway!"), anyM, true}},
 	{"highway!=", ruleShape{nwr, eq("highway"), eq(""), false}},
+	{"k!!=v", ruleShape{nwr, eq("k!"), eq("v"), false}},
+	{"k=a=b", ruleShape{nwr, eq("k"), eq("a=b"), true}},
 	{"!=x", ruleShape{nwr, eq(""), eq("x"), false}},
 	{"=foo", ruleShape{nwr, eq(""), eq("foo"), true}},
 	{"", ruleShape{nwr, eq(""), anyM, true}},

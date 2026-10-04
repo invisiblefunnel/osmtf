@@ -119,6 +119,7 @@ var conformance = []tagCase{
 	{"multipolygon flag ignored on ways", []string{"w/x"}, Way, kv("type", "multipolygon"), 0, false},
 	{"multipolygon flag ignored on nodes", []string{"n/x"}, Node, kv("type", "multipolygon"), 0, false},
 	{"multipolygon flag needs type key", []string{"a/building"}, Relation, kv("building", "yes", "name", "multipolygon"), Areas, false},
+	{"multipolygon flag case sensitive", []string{"a/building"}, Relation, kv("type", "Multipolygon", "building", "yes"), Areas, false},
 	{"no expressions", nil, Node, kv("a", "b"), 0, false},
 	{"second expression matches", []string{"n/a", "n/b"}, Node, kv("b", ""), Nodes, false},
 	{"later tag matches", []string{"n/amenity=cafe"}, Node, kv("name", "x", "cuisine", "y", "amenity", "cafe"), Nodes, false},
@@ -186,12 +187,18 @@ func TestBeginResets(t *testing.T) {
 	m.Begin(Way)
 	m.Tag([]byte("highway"), []byte("x"))
 	m.Tag([]byte("building"), []byte("y"))
+	if m.Hits() != Ways|Areas {
+		t.Fatalf("hits before Begin = %d, want Ways|Areas", m.Hits())
+	}
 	m.Begin(Way)
 	if m.Hits() != 0 {
 		t.Fatalf("hits after Begin = %d", m.Hits())
 	}
 	m.Begin(Relation)
 	m.Tag([]byte("type"), []byte("boundary"))
+	if !m.Multipolygon() {
+		t.Fatal("multipolygon not set before Begin")
+	}
 	m.Begin(Relation)
 	if m.Multipolygon() {
 		t.Fatal("multipolygon survived Begin")
