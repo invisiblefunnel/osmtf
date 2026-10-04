@@ -1,4 +1,4 @@
-# osm-tag-filter: design
+# osmtf: design
 
 Date: 2026-10-04
 Status: approved in conversation, awaiting written review
@@ -92,9 +92,9 @@ Applied to the key and to the value independently.
 
 ## Public API
 
-Package `osmtagfilter`. Standard library only.
+Package `osmtf`. Standard library only.
 
-Module path: `github.com/invisiblefunnel/osm-tag-filter`.
+Module path: `github.com/invisiblefunnel/osmtf`.
 
 ```go
 // Types is a bitmask of rule groups.
@@ -230,9 +230,9 @@ field assignments and Tag loops only over rules that apply.
 The only parse failure, matching osmium, is an unknown type letter. Compile
 returns a `*ParseError` whose `Pos` is the offset of that byte and whose
 message reads `unknown object type 'x' (allowed are 'n', 'w', 'r', and 'a')`.
-`Error()` returns exactly `osmtagfilter: expression %q: %s` with the
+`Error()` returns exactly `osmtf: expression %q: %s` with the
 expression and message substituted, for example
-`osmtagfilter: expression "x/amenity": unknown object type 'x' (allowed are 'n', 'w', 'r', and 'a')`.
+`osmtf: expression "x/amenity": unknown object type 'x' (allowed are 'n', 'w', 'r', and 'a')`.
 
 Compile with zero expressions succeeds and yields a filter that matches
 nothing. Duplicate expressions are allowed.
@@ -295,7 +295,7 @@ slices.
 
 ```
 go.mod
-osmtagfilter.go        // types, Compile, Filter, ParseError
+osmtf.go               // types, Compile, Filter, ParseError
 parse.go               // expression and string matcher parsing
 match.go               // Matcher, Tag, string matching
 parse_test.go

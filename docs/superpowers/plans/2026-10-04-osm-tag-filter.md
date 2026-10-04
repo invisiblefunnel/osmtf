@@ -1,8 +1,8 @@
-# osm-tag-filter Implementation Plan
+# osmtf Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A standard-library Go package `osmtagfilter` that compiles `osmium tags-filter` expressions once and tests OSM objects tag-by-tag with zero allocations, with results identical to osmium-tool 1.19.0.
+**Goal:** A standard-library Go package `osmtf` that compiles `osmium tags-filter` expressions once and tests OSM objects tag-by-tag with zero allocations, with results identical to osmium-tool 1.19.0.
 
 **Architecture:** `Compile` parses each expression into a `rule` (type mask, key matcher, value matcher, `want` flag) whose pattern bytes live in one shared `blob`, and builds per-kind index slices so `Tag` only scans applicable rules. `Matcher` is a small value type holding a `*Filter` plus per-object state (`kind`, `hits`, `multipolygon`); `Tag` evaluates three independent groups (core rules, area rules, multipolygon flag), each only while still unset, and returns the hits bitmask. Geometry is left to the caller via `IsAreaWay`.
 
@@ -12,19 +12,19 @@
 
 ## Global Constraints
 
-- Module path `github.com/invisiblefunnel/osm-tag-filter`; package name `osmtagfilter`; `go 1.22` directive in `go.mod` (the local toolchain is 1.26, which builds it fine).
+- Module path `github.com/invisiblefunnel/osmtf`; package name `osmtf`; `go 1.22` directive in `go.mod` (the local toolchain is 1.26, which builds it fine).
 - Standard library only. No `require` lines in `go.mod`, in tests either.
 - The exported API is exactly the spec's: `Types` (`Nodes`, `Ways`, `Relations`, `Areas` = 1, 2, 4, 8), `Kind` (`Node`, `Way`, `Relation` = 0, 1, 2), `Filter`, `Compile`, `MustCompile`, `(*Filter).Types`, `(*Filter).Matcher`, `Matcher`, `(*Matcher).Begin`, `(*Matcher).Tag`, `(*Matcher).Hits`, `(*Matcher).Multipolygon`, `IsAreaWay`, `ParseError`. Every exported identifier has a doc comment.
 - `Matcher`, `Begin`, `Tag`, `Hits`, and `Multipolygon` allocate nothing, never convert `[]byte` to `string`, and never retain the caller's slices.
 - Only ASCII space (0x20) is trimmed, and only where the spec says. Everything is case sensitive. No escaping.
-- The only parse failure is an unknown type letter. `ParseError.Msg` is `unknown object type '%c' (allowed are 'n', 'w', 'r', and 'a')` with the offending byte; `Error()` is `osmtagfilter: expression %q: %s`.
+- The only parse failure is an unknown type letter. `ParseError.Msg` is `unknown object type '%c' (allowed are 'n', 'w', 'r', and 'a')` with the offending byte; `Error()` is `osmtf: expression %q: %s`.
 - A `Filter` is immutable after `Compile` and safe for concurrent use.
 - Every task ends with `gofmt -l .` printing nothing, `go vet ./...` clean, `go test ./...` passing, then one commit for that task only (AGENTS.md: atomic commits, checks before committing).
-- All test files except `example_test.go` are in package `osmtagfilter` (internal tests) so they can inspect compiled rules.
+- All test files except `example_test.go` are in package `osmtf` (internal tests) so they can inspect compiled rules.
 
 **Deviations from the spec, decided here:**
 - Index slices are `[]uint32`, not `[]uint16`. `uint16` silently breaks past 65535 expressions; `uint32` costs nothing measurable. Task 3 pins this with a 70000-rule test.
-- `Begin` panics with the message `osmtagfilter: invalid Kind` for a `Kind` above `Relation`, instead of indexing out of range later inside `Tag`.
+- `Begin` panics with the message `osmtf: invalid Kind` for a `Kind` above `Relation`, instead of indexing out of range later inside `Tag`.
 
 ## Review Focus
 
@@ -43,10 +43,10 @@ Inputs the spec implies but did not list, each pinned by a test in the owning ta
 | File | Responsibility |
 |---|---|
 | `go.mod` | module path and Go floor |
-| `osmtagfilter.go` | package doc, `Types`, `Kind`, `Filter`, `Compile`, `MustCompile`, `Types()`, `IsAreaWay`, `ParseError` |
+| `osmtf.go` | package doc, `Types`, `Kind`, `Filter`, `Compile`, `MustCompile`, `Types()`, `IsAreaWay`, `ParseError` |
 | `parse.go` | `matchKind`, `strMatcher`, `rule`, `compiler` (blob interning), string matcher construction, expression parsing |
 | `match.go` | `strMatcher.match`, `rule.match`, `Matcher` and its methods |
-| `osmtagfilter_test.go` | tests for constants, `ParseError`, `IsAreaWay`, `Compile` indexes and errors |
+| `osmtf_test.go` | tests for constants, `ParseError`, `IsAreaWay`, `Compile` indexes and errors |
 | `parse_test.go` | string matcher and expression shape tables |
 | `match_test.go` | string matching unit tests, conformance table, allocation/order/early-exit/concurrency properties |
 | `example_test.go` | `ExampleFilter_Matcher` (external test package) showing the caller's combination formula |
@@ -60,7 +60,7 @@ Inputs the spec implies but did not list, each pinned by a test in the owning ta
 ### Task 1: Module, public enums, ParseError, IsAreaWay
 
 **Files:**
-- Create: `go.mod`, `osmtagfilter.go`, `osmtagfilter_test.go`
+- Create: `go.mod`, `osmtf.go`, `osmtf_test.go`
 
 **Interfaces:**
 - Produces:
@@ -77,10 +77,10 @@ Inputs the spec implies but did not list, each pinned by a test in the owning ta
 - [ ] **Step 1: Create the module**
 
 ```bash
-go mod init github.com/invisiblefunnel/osm-tag-filter && go mod edit -go=1.22
+go mod init github.com/invisiblefunnel/osmtf && go mod edit -go=1.22
 ```
 
-- [ ] **Step 2: Write the failing tests in `osmtagfilter_test.go`**
+- [ ] **Step 2: Write the failing tests in `osmtf_test.go`**
 
 ```go
 func TestTypesAndKindValues(t *testing.T) {
@@ -94,7 +94,7 @@ func TestTypesAndKindValues(t *testing.T) {
 
 func TestParseErrorError(t *testing.T) {
 	err := &ParseError{Expr: "x/amenity", Pos: 0, Msg: "unknown object type 'x' (allowed are 'n', 'w', 'r', and 'a')"}
-	want := `osmtagfilter: expression "x/amenity": unknown object type 'x' (allowed are 'n', 'w', 'r', and 'a')`
+	want := `osmtf: expression "x/amenity": unknown object type 'x' (allowed are 'n', 'w', 'r', and 'a')`
 	if got := err.Error(); got != want {
 		t.Fatalf("got %q\nwant %q", got, want)
 	}
@@ -118,19 +118,19 @@ func TestIsAreaWay(t *testing.T) {
 Run: `go test ./...`
 Expected: build failure, `undefined: Nodes` (or similar).
 
-- [ ] **Step 4: Implement `osmtagfilter.go`**
+- [ ] **Step 4: Implement `osmtf.go`**
 
-Package doc comment (one paragraph: what it is, that it mirrors `osmium tags-filter`, and that `Matcher` is the streaming API). `Types`, `Kind` and their constants with the spec's doc comments. `ParseError` with `Error()` using `fmt.Sprintf("osmtagfilter: expression %q: %s", e.Expr, e.Msg)`. `IsAreaWay` returns `closed && nodeCount >= 4`.
+Package doc comment (one paragraph: what it is, that it mirrors `osmium tags-filter`, and that `Matcher` is the streaming API). `Types`, `Kind` and their constants with the spec's doc comments. `ParseError` with `Error()` using `fmt.Sprintf("osmtf: expression %q: %s", e.Expr, e.Msg)`. `IsAreaWay` returns `closed && nodeCount >= 4`.
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `gofmt -l . && go vet ./... && go test ./...`
-Expected: `ok  	github.com/invisiblefunnel/osm-tag-filter`, no gofmt output.
+Expected: `ok  	github.com/invisiblefunnel/osmtf`, no gofmt output.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add go.mod osmtagfilter.go osmtagfilter_test.go
+git add go.mod osmtf.go osmtf_test.go
 git commit -m "Add module, public enums, ParseError, IsAreaWay"
 ```
 
@@ -246,8 +246,8 @@ git commit -m "Add string matcher construction"
 ### Task 3: Expression parsing and Compile
 
 **Files:**
-- Modify: `parse.go` (add `rule`, `parseExpr`), `osmtagfilter.go` (add `Filter`, `Compile`, `MustCompile`, `Types()`)
-- Test: `parse_test.go`, `osmtagfilter_test.go`
+- Modify: `parse.go` (add `rule`, `parseExpr`), `osmtf.go` (add `Filter`, `Compile`, `MustCompile`, `Types()`)
+- Test: `parse_test.go`, `osmtf_test.go`
 
 **Interfaces:**
 - Consumes: `compiler`, `stringMatcher`, `trimSpaces` (Task 2); `ParseError` (Task 1).
@@ -350,7 +350,7 @@ func TestCompileShape(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Write the failing error and index tests in `osmtagfilter_test.go`**
+- [ ] **Step 2: Write the failing error and index tests in `osmtf_test.go`**
 
 ```go
 var compileErrorCases = []struct {
@@ -437,7 +437,7 @@ func TestCompileManyRules(t *testing.T) {
 Run: `go test ./...`
 Expected: build failure, `undefined: Compile`.
 
-- [ ] **Step 4: Implement `rule` and `parseExpr` in `parse.go`, then `Filter`, `Compile`, `MustCompile`, `Types()` in `osmtagfilter.go`**
+- [ ] **Step 4: Implement `rule` and `parseExpr` in `parse.go`, then `Filter`, `Compile`, `MustCompile`, `Types()` in `osmtf.go`**
 
 Per the Interfaces block. Doc comments on `Filter` ("Immutable and safe for concurrent use once Compile returns"), `Compile` (zero expressions yields a filter that matches nothing; duplicates allowed), `MustCompile`, and `Types` ("the union of the groups any rule applies to, so a decoder can skip object kinds that cannot match").
 
@@ -449,7 +449,7 @@ Expected: PASS, no gofmt output.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add parse.go parse_test.go osmtagfilter.go osmtagfilter_test.go
+git add parse.go parse_test.go osmtf.go osmtf_test.go
 git commit -m "Add expression parsing and Compile"
 ```
 
@@ -557,7 +557,7 @@ git commit -m "Add string and rule matching"
   ```go
   type Matcher struct { f *Filter; kind Kind; hits Types; multipolygon bool }
   func (f *Filter) Matcher() Matcher
-  func (m *Matcher) Begin(kind Kind)       // zeroes hits and multipolygon; panics "osmtagfilter: invalid Kind" if kind > Relation
+  func (m *Matcher) Begin(kind Kind)       // zeroes hits and multipolygon; panics "osmtf: invalid Kind" if kind > Relation
   func (m *Matcher) Tag(key, value []byte) Types
   func (m *Matcher) Hits() Types
   func (m *Matcher) Multipolygon() bool
@@ -709,7 +709,7 @@ func TestBeginResets(t *testing.T) {
 
 func TestBeginInvalidKindPanics(t *testing.T) {
 	defer func() {
-		if r := recover(); r != "osmtagfilter: invalid Kind" {
+		if r := recover(); r != "osmtf: invalid Kind" {
 			t.Fatalf("recovered %v", r)
 		}
 	}()
@@ -786,7 +786,7 @@ git commit -m "Add Matcher streaming API with conformance table"
 
 **Files:**
 - Modify: `match_test.go`
-- Create: `example_test.go` (package `osmtagfilter_test`)
+- Create: `example_test.go` (package `osmtf_test`)
 
 **Interfaces:**
 - Consumes: `conformance`, `runCase`, `kv` (Task 5), full public API.
@@ -883,28 +883,28 @@ func TestConcurrentMatchers(t *testing.T) {
 - [ ] **Step 2: Write `example_test.go`**
 
 ```go
-package osmtagfilter_test
+package osmtf_test
 
 import (
 	"fmt"
 
-	osmtagfilter "github.com/invisiblefunnel/osm-tag-filter"
+	"github.com/invisiblefunnel/osmtf"
 )
 
 func ExampleFilter_Matcher() {
-	f := osmtagfilter.MustCompile("w/highway", "a/building")
+	f := osmtf.MustCompile("w/highway", "a/building")
 	m := f.Matcher()
 
 	// A way tagged building=yes, fed one tag at a time by a decoder.
-	m.Begin(osmtagfilter.Way)
+	m.Begin(osmtf.Way)
 	m.Tag([]byte("building"), []byte("yes"))
 	h := m.Hits()
 
 	// The caller combines hits with geometry it already knows.
-	closedWith5Nodes := osmtagfilter.IsAreaWay(5, true)
-	openWith5Nodes := osmtagfilter.IsAreaWay(5, false)
-	fmt.Println(h&osmtagfilter.Ways != 0 || (h&osmtagfilter.Areas != 0 && closedWith5Nodes))
-	fmt.Println(h&osmtagfilter.Ways != 0 || (h&osmtagfilter.Areas != 0 && openWith5Nodes))
+	closedWith5Nodes := osmtf.IsAreaWay(5, true)
+	openWith5Nodes := osmtf.IsAreaWay(5, false)
+	fmt.Println(h&osmtf.Ways != 0 || (h&osmtf.Areas != 0 && closedWith5Nodes))
+	fmt.Println(h&osmtf.Ways != 0 || (h&osmtf.Areas != 0 && openWith5Nodes))
 	// Output:
 	// true
 	// false
@@ -1119,7 +1119,7 @@ git commit -m "Add reference oracle and fuzz tests"
   func diffCorpus() []osmObject
   func diffExpressionSets() [][]string
   ```
-  `writeOSMXML` emits `<osm version="0.6" generator="osm-tag-filter-test">`, nodes with `lat="0" lon="0"`, ways with one `<nd ref=.../>` per `nodeRefs`, relations with one fixed `<member type="way" ref="1" role="outer"/>`, every object with `version="1"`, tags as `<tag k=.. v=../>` escaped with `xml.EscapeText`, in node, way, relation order.
+  `writeOSMXML` emits `<osm version="0.6" generator="osmtf-test">`, nodes with `lat="0" lon="0"`, ways with one `<nd ref=.../>` per `nodeRefs`, relations with one fixed `<member type="way" ref="1" role="outer"/>`, every object with `version="1"`, tags as `<tag k=.. v=../>` escaped with `xml.EscapeText`, in node, way, relation order.
   `runOsmium` runs `osmium tags-filter -R -f opl <file> <exprs...>`; on a non-zero exit it returns an error whose text includes stderr, otherwise the set of first space-delimited tokens of every stdout line.
   `matchLocally` applies the spec's combination formula: nodes `h&Nodes != 0`; ways `h&Ways != 0 || (h&Areas != 0 && IsAreaWay(len(nodeRefs), nodeRefs[0] == nodeRefs[len-1]))`; relations `h&Relations != 0 || (h&Areas != 0 && m.Multipolygon())`.
   `diffCorpus`: the fixed objects below plus 150 objects from `rand.New(rand.NewSource(1))` with 0–4 tags each (keys unique per object, drawn from the key vocabulary, values from the value vocabulary), ways with 1–6 node refs and a 50% chance of being closed (first ref repeated last), relations with a 50% chance of a `type` tag from `multipolygon`, `boundary`, `route`. Fixed objects use the IDs below; generated objects take IDs from 100 upward per kind. No tabs, newlines, or control characters in any key or value: XML attribute normalization would turn them into spaces and silently change the test.
@@ -1273,7 +1273,7 @@ git commit -m "Add Tag benchmarks"
 
 - [ ] **Step 1: Write the README**
 
-Sections, in order: one-paragraph description (mirrors `osmium tags-filter` expressions and matching, verified against osmium-tool 1.19.0; streaming, zero-allocation, safe to share); `go get github.com/invisiblefunnel/osm-tag-filter`; a usage block that is the `ExampleFilter_Matcher` body plus the three-line combination formula from the spec's "How a caller combines results"; a short "Semantics" list (type prefixes, key-only, `=`, `!=`, comma lists, `*`, `prefix*`, `*substring`, area rule for closed ways with 4+ nodes and `type=multipolygon`/`boundary` relations, case sensitive, only spaces trimmed); a "Not in scope" list (expression files, referenced-object completion, `--invert-match`); a link to `docs/superpowers/specs/2026-10-04-osm-tag-filter-design.md`.
+Sections, in order: one-paragraph description (mirrors `osmium tags-filter` expressions and matching, verified against osmium-tool 1.19.0; streaming, zero-allocation, safe to share); `go get github.com/invisiblefunnel/osmtf`; a usage block that is the `ExampleFilter_Matcher` body plus the three-line combination formula from the spec's "How a caller combines results"; a short "Semantics" list (type prefixes, key-only, `=`, `!=`, comma lists, `*`, `prefix*`, `*substring`, area rule for closed ways with 4+ nodes and `type=multipolygon`/`boundary` relations, case sensitive, only spaces trimmed); a "Not in scope" list (expression files, referenced-object completion, `--invert-match`); a link to `docs/superpowers/specs/2026-10-04-osm-tag-filter-design.md`.
 
 - [ ] **Step 2: Verify the whole module one last time**
 
