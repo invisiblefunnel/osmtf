@@ -1,6 +1,9 @@
 package osmtf
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // matchKind is how a strMatcher compares a string with its pattern.
 type matchKind uint8
@@ -19,6 +22,14 @@ type strMatcher struct {
 	kind matchKind
 	pat  []byte   // matchEqual, matchPrefix, matchSubstring
 	list [][]byte // matchList
+}
+
+// rule is one compiled expression.
+type rule struct {
+	types Types
+	key   strMatcher
+	value strMatcher // kind matchAny for key-only rules
+	want  bool       // false when inverted
 }
 
 // compiler holds the state shared while compiling expressions.
@@ -68,4 +79,59 @@ func (c *compiler) stringMatcher(raw string) strMatcher {
 		pat := strings.TrimSuffix(s[1:], "*")
 		return strMatcher{kind: matchSubstring, pat: c.intern(pat)}
 	}
+}
+
+// parseExpr compiles one expression, [TYPES/]REST, with osmium's grammar and
+// interns its patterns. The only failure is an unknown type letter, which is
+// always reported as a *ParseError.
+func (c *compiler) parseExpr(expr string) (rule, error) {
+	types := Nodes | Ways | Relations
+	rest := expr
+	switch p := strings.IndexByte(expr, '/'); {
+	case p == 0:
+		rest = expr[1:]
+	case p > 0:
+		types = 0
+		for i := 0; i < p; i++ {
+			switch expr[i] {
+			case 'n':
+				types |= Nodes
+			case 'w':
+				types |= Ways
+			case 'r':
+				types |= Relations
+			case 'a':
+				types |= Areas
+			default:
+				// %c formats the byte as the rune of the same value, so Msg is
+				// valid UTF-8 even for a non-ASCII byte.
+				return rule{}, &ParseError{
+					Expr: expr,
+					Pos:  i,
+					Msg:  fmt.Sprintf("unknown object type '%c' (allowed are 'n', 'w', 'r', and 'a')", expr[i]),
+				}
+			}
+		}
+		rest = expr[p+1:]
+	}
+
+	eq := strings.IndexByte(rest, '=')
+	if eq < 0 {
+		// Key-only: any value matches, and a trailing '!' is part of the key.
+		return rule{
+			types: types,
+			key:   c.stringMatcher(rest),
+			value: strMatcher{kind: matchAny},
+			want:  true,
+		}, nil
+	}
+	// The '!' of "!=" is looked for on the raw key, before stringMatcher trims
+	// it, so "k !=v" is inverted and "k! =v" is not.
+	key, inverted := strings.CutSuffix(rest[:eq], "!")
+	return rule{
+		types: types,
+		key:   c.stringMatcher(key),
+		value: c.stringMatcher(rest[eq+1:]),
+		want:  !inverted,
+	}, nil
 }
