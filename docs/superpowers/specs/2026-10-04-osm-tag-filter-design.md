@@ -94,8 +94,7 @@ Applied to the key and to the value independently.
 
 Package `osmtagfilter`. Standard library only.
 
-Module path assumed to be `github.com/danielwhalen/osm-tag-filter`. There is
-no git remote yet, so this must be confirmed before `go mod init`.
+Module path: `github.com/invisiblefunnel/osm-tag-filter`.
 
 ```go
 // Types is a bitmask of rule groups.
