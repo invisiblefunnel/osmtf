@@ -38,7 +38,8 @@ type Matcher struct {
 	f            *Filter
 	kind         Kind
 	hits         Types // groups matched since Begin
-	multipolygon bool  // a relation tag type=multipolygon or type=boundary was seen
+	multipolygon bool  // the relation's first type tag is type=multipolygon or type=boundary
+	typeSeen     bool  // a relation tag with key type was seen; later ones are ignored
 }
 
 // Matcher returns a Matcher for f, in the state Begin(Node) would leave it.
@@ -57,10 +58,11 @@ func (m *Matcher) Begin(kind Kind) {
 	m.kind = kind
 	m.hits = 0
 	m.multipolygon = false
+	m.typeSeen = false
 }
 
-// The relation tags that set the multipolygon flag, type=multipolygon and
-// type=boundary, as byte slices so Tag can compare them with bytes.Equal.
+// The key and values that Tag checks a relation's first type tag against, as
+// byte slices so it can compare them with bytes.Equal.
 var (
 	keyType         = []byte("type")
 	valMultipolygon = []byte("multipolygon")
@@ -71,8 +73,8 @@ var (
 // what Hits would return. Neither slice is retained.
 func (m *Matcher) Tag(key, value []byte) Types {
 	f := m.f
-	// Each group is evaluated only while its result is unset; once set, it
-	// stays set until the next Begin.
+	// The core and area groups are each evaluated only while their bit is
+	// unset; once set, a bit stays set until the next Begin.
 	kindBit := Types(1) << m.kind
 	if m.hits&kindBit == 0 {
 		for _, i := range f.core[m.kind] {
@@ -90,9 +92,11 @@ func (m *Matcher) Tag(key, value []byte) Types {
 			}
 		}
 	}
-	if m.kind == Relation && !m.multipolygon && bytes.Equal(key, keyType) &&
-		(bytes.Equal(value, valMultipolygon) || bytes.Equal(value, valBoundary)) {
-		m.multipolygon = true
+	// Osmium reads only a relation's first type tag, so that tag alone decides
+	// the multipolygon flag and any later type tag is ignored.
+	if m.kind == Relation && !m.typeSeen && bytes.Equal(key, keyType) {
+		m.typeSeen = true
+		m.multipolygon = bytes.Equal(value, valMultipolygon) || bytes.Equal(value, valBoundary)
 	}
 	return m.hits
 }
@@ -104,8 +108,9 @@ func (m *Matcher) Hits() Types {
 	return m.hits
 }
 
-// Multipolygon reports whether, since Begin, a relation tag
-// type=multipolygon or type=boundary was seen. Always false for other kinds.
+// Multipolygon reports whether the relation's first type tag seen since
+// Begin has the value multipolygon or boundary, osmium's rule for when a
+// relation counts as an area. Always false for other kinds.
 func (m *Matcher) Multipolygon() bool {
 	return m.multipolygon
 }

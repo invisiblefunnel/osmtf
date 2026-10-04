@@ -62,9 +62,9 @@ relationMatches := h&osmtf.Relations != 0 || (h&osmtf.Areas != 0 && m.Multipolyg
 - `*substring` matches anything that contains `substring`, not only what ends
   with it, as in `n/name=*Paris`. `*substring*` is the same.
 - Area rules (`a/`) apply to closed ways with 4 or more nodes and to relations
-  tagged `type=multipolygon` or `type=boundary`. `Hits` reports an area rule
-  hit as `Areas`, and the caller checks the way with `IsAreaWay` or the
-  relation with `Multipolygon`, as in the formula above.
+  whose first `type` tag is `multipolygon` or `boundary`. `Hits` reports an
+  area rule hit as `Areas`, and the caller checks the way with `IsAreaWay` or
+  the relation with `Multipolygon`, as in the formula above.
 - Everything is case sensitive, and there is no escaping.
 - Only ASCII spaces are trimmed, from both ends of each key, value, and list
   item. Tabs and other whitespace are kept.

@@ -116,10 +116,12 @@ func oracleParse(expr string) (oracleRule, int) {
 
 // oracleMatch is osmium's nested loops over a whole tag list. For each tag it
 // tests every rule for kind's own group and, for ways and relations, every
-// area rule, and it sets mp for a relation tag type=multipolygon or
-// type=boundary.
+// area rule. For a relation, mp comes from its first type tag alone, as
+// osmium's get_value_by_key("type") does: true when that tag's value is
+// multipolygon or boundary.
 func oracleMatch(rules []oracleRule, kind Kind, tags [][2]string) (hits Types, mp bool) {
 	own := [...]Types{Node: Nodes, Way: Ways, Relation: Relations}[kind]
+	typeSeen := false
 	for _, tag := range tags {
 		k, v := tag[0], tag[1]
 		for _, r := range rules {
@@ -134,8 +136,9 @@ func oracleMatch(rules []oracleRule, kind Kind, tags [][2]string) (hits Types, m
 				}
 			}
 		}
-		if kind == Relation && k == "type" && (v == "multipolygon" || v == "boundary") {
-			mp = true
+		if kind == Relation && k == "type" && !typeSeen {
+			typeSeen = true
+			mp = v == "multipolygon" || v == "boundary"
 		}
 	}
 	return hits, mp
@@ -188,17 +191,12 @@ func FuzzMatchAgainstOracle(f *testing.F) {
 		}
 		f.Add(e[0], e[1], uint8(c.kind), tv[0], tv[1], tv[2], tv[3], tv[4], tv[5])
 	}
+	// Duplicate type tags, in both orders: osmium reads only the first.
+	f.Add("a/building", "a/building", uint8(Relation), "type", "route", "type", "multipolygon", "building", "yes")
+	f.Add("a/building", "a/building", uint8(Relation), "type", "multipolygon", "type", "route", "building", "yes")
 	f.Fuzz(func(t *testing.T, e1, e2 string, kind uint8, k1, v1, k2, v2, k3, v3 string) {
 		k := Kind(kind % 3)
-		// Keys are unique within an object: keep the first of any duplicate key.
-		var tags [][2]string
-		seen := map[string]bool{}
-		for _, tg := range [][2]string{{k1, v1}, {k2, v2}, {k3, v3}} {
-			if !seen[tg[0]] {
-				seen[tg[0]] = true
-				tags = append(tags, tg)
-			}
-		}
+		tags := [][2]string{{k1, v1}, {k2, v2}, {k3, v3}}
 		exprs := []string{e1, e2}
 		var rules []oracleRule
 		oracleBad := -1

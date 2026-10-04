@@ -18,8 +18,8 @@ const (
 	// Relations is the group of rules for relations (type letter r).
 	Relations
 	// Areas is the group of rules for areas (type letter a). Osmium applies
-	// them to ways that IsAreaWay accepts and to relations tagged
-	// type=multipolygon or type=boundary.
+	// them to ways that IsAreaWay accepts and to relations whose first type
+	// tag is multipolygon or boundary.
 	Areas
 )
 

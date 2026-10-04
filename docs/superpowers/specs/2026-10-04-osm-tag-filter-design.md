@@ -27,7 +27,7 @@ In scope for v1:
 - Key-only, key=value, comma lists, `*` any, `prefix*`, `*substring`,
   `*substring*`, and `!=` negation.
 - Area semantics: area rules apply to closed ways with 4 or more nodes and to
-  relations tagged `type=multipolygon` or `type=boundary`.
+  relations whose first `type` tag is `multipolygon` or `boundary`.
 
 Out of scope for v1:
 
@@ -83,11 +83,13 @@ Applied to the key and to the value independently.
   objects without a `highway` tag.
 - An object matches when any of its tags matches any rule that applies to its
   type. Keys are unique within an object, so the order tags are tested in does
-  not affect the result.
+  not affect the result. Should data repeat a key anyway, osmium reads only a
+  relation's first `type` tag, so with duplicate keys the multipolygon flag
+  depends on tag order, exactly as in osmium.
 - Nodes use node rules. Ways use way rules, plus area rules when the way has
   4 or more nodes and its first and last node are the same. Relations use
-  relation rules, plus area rules when the relation has a `type` tag whose
-  value is `multipolygon` or `boundary`.
+  relation rules, plus area rules when the relation's first `type` tag has the
+  value `multipolygon` or `boundary`.
 - Everything is case sensitive. There is no escaping.
 
 ## Public API
@@ -129,7 +131,7 @@ func (f *Filter) Types() Types
 
 // Matcher is per-object state. It is a value type and allocates nothing.
 // The zero Matcher is not usable; obtain one from Filter.Matcher.
-type Matcher struct { /* f *Filter, kind, hits, multipolygon */ }
+type Matcher struct { /* f *Filter, kind, hits, multipolygon, typeSeen */ }
 
 func (f *Filter) Matcher() Matcher
 
@@ -145,8 +147,9 @@ func (m *Matcher) Tag(key, value []byte) Types
 // rule hit.
 func (m *Matcher) Hits() Types
 
-// Multipolygon reports whether, since Begin, a relation tag
-// type=multipolygon or type=boundary was seen. Always false for other kinds.
+// Multipolygon reports whether the relation's first type tag seen since
+// Begin has the value multipolygon or boundary, osmium's rule for when a
+// relation counts as an area. Always false for other kinds.
 func (m *Matcher) Multipolygon() bool
 
 // IsAreaWay is osmium's rule for when a way counts as an area.
@@ -242,7 +245,8 @@ nothing. Duplicate expressions are allowed.
 `Filter.Matcher()` returns a Matcher by value holding the Filter pointer. The
 caller keeps it on the stack or in its own struct.
 
-`Begin(kind)` stores the kind and zeroes `hits` and `multipolygon`.
+`Begin(kind)` stores the kind and zeroes `hits`, `multipolygon`, and
+`typeSeen`.
 
 `Tag(key, value)` evaluates three independent groups, each only while its
 result is still unset:
@@ -251,8 +255,9 @@ result is still unset:
    kind's bit and stop scanning.
 2. **Area rules**, for ways and relations only: scan `area`; on the first hit
    set `Areas`.
-3. **Multipolygon flag**, for relations only: set when key is `type` and
-   value is `multipolygon` or `boundary`.
+3. **Multipolygon flag**, for relations only: the relation's first `type` tag
+   sets `typeSeen` and decides the flag, which is set when that tag's value is
+   `multipolygon` or `boundary`. Later `type` tags are ignored.
 
 It then returns `hits`.
 

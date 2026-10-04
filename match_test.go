@@ -196,6 +196,11 @@ func TestBeginResets(t *testing.T) {
 	if m.Multipolygon() {
 		t.Fatal("multipolygon survived Begin")
 	}
+	// The previous relation's type tag must not hide this one's.
+	m.Tag([]byte("type"), []byte("multipolygon"))
+	if !m.Multipolygon() {
+		t.Fatal("type tag ignored after Begin")
+	}
 }
 
 func TestBeginInvalidKindPanics(t *testing.T) {
@@ -240,12 +245,15 @@ func TestDuplicateKeys(t *testing.T) {
 	if m.Hits() != Ways {
 		t.Fatalf("hits = %d, want Ways", m.Hits())
 	}
-	m = MustCompile("n/x").Matcher()
-	m.Begin(Relation)
-	m.Tag([]byte("type"), []byte("multipolygon"))
-	m.Tag([]byte("type"), []byte("route"))
-	if !m.Multipolygon() {
-		t.Fatal("multipolygon flag was cleared by a later type tag")
+	// Osmium reads only a relation's first type tag, so with duplicate type
+	// tags the multipolygon flag depends on their order. These cases stay out
+	// of conformance, whose rows TestHitsIndependentOfTagOrder reorders.
+	for _, c := range []tagCase{
+		{"type=multipolygon then type=route", []string{"n/x"}, Relation, kv("type", "multipolygon", "type", "route"), 0, true},
+		{"type=route then type=multipolygon", []string{"a/building"}, Relation, kv("type", "route", "type", "multipolygon", "building", "yes"), Areas, false},
+		{"type=route then type=boundary", []string{"a/building"}, Relation, kv("building", "yes", "type", "route", "type", "boundary"), Areas, false},
+	} {
+		runCase(t, MustCompile(c.exprs...), c)
 	}
 }
 

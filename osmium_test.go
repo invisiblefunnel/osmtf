@@ -217,6 +217,11 @@ func diffCorpus() []osmObject {
 		{kind: Relation, id: 23, tags: kv("building", "yes")},
 		{kind: Relation, id: 24, tags: kv("type", "restriction")},
 		{kind: Relation, id: 25, tags: kv("type", "multipolygon")},
+		// Duplicate type tags, which osmium's XML reader keeps. Osmium reads
+		// only a relation's first type tag, so r26 is not a multipolygon and
+		// r27 is.
+		{kind: Relation, id: 26, tags: kv("type", "route", "type", "multipolygon", "building", "yes")},
+		{kind: Relation, id: 27, tags: kv("type", "multipolygon", "type", "route", "building", "yes")},
 	}
 
 	keys := []string{"amenity", "highway", "building", "name", "name:de", "addr:street",
@@ -234,7 +239,7 @@ func diffCorpus() []osmObject {
 		nextID[o.kind]++
 
 		// Half the relations get a type tag after their random tags, which
-		// then skip the key "type": keys are unique within an object.
+		// then skip the key "type", so generated objects keep unique keys.
 		withType := o.kind == Relation && rng.Intn(2) == 0
 		ntags := rng.Intn(5)
 		for _, i := range rng.Perm(len(keys)) {
