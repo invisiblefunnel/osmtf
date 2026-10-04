@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Mondays at 06:17 UTC, off the top of the hour, when GitHub delays
+    # scheduled runs most.
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -35,3 +40,28 @@ jobs:
         run: go vet ./...
       - name: go test
         run: go test -race ./...
+
+  # go test runs only the fuzz targets' seed inputs. This job fuzzes each
+  # target with generated inputs, weekly or when started by hand.
+  fuzz:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [FuzzMatchAgainstOracle, FuzzCompile]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - name: go test -fuzz
+        run: go test -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime 10m .
+      # On failure, Go writes the input to testdata/fuzz/<target>/<hash> and
+      # logs the go test -run command that replays it from there.
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}-failing-input
+          path: testdata/fuzz/${{ matrix.target }}
