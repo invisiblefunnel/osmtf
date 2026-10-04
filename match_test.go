@@ -53,3 +53,195 @@ func TestRuleMatch(t *testing.T) {
 		}
 	}
 }
+
+func kv(pairs ...string) [][2]string {
+	out := make([][2]string, 0, len(pairs)/2)
+	for i := 0; i+1 < len(pairs); i += 2 {
+		out = append(out, [2]string{pairs[i], pairs[i+1]})
+	}
+	return out
+}
+
+// tagCase is one matching scenario: compile exprs, Begin(kind), feed tags in
+// order, then expect Hits() == hits and Multipolygon() == mp.
+type tagCase struct {
+	name  string
+	exprs []string
+	kind  Kind
+	tags  [][2]string
+	hits  Types
+	mp    bool
+}
+
+var conformance = []tagCase{
+	// man page examples
+	{"n/amenity node", []string{"n/amenity"}, Node, kv("amenity", "cafe"), Nodes, false},
+	{"n/amenity way", []string{"n/amenity"}, Way, kv("amenity", "cafe"), 0, false},
+	{"nw/highway node", []string{"nw/highway"}, Node, kv("highway", "primary"), Nodes, false},
+	{"nw/highway way", []string{"nw/highway"}, Way, kv("highway", "primary"), Ways, false},
+	{"nw/highway relation", []string{"nw/highway"}, Relation, kv("highway", "primary"), 0, false},
+	{"/note relation", []string{"/note"}, Relation, kv("note", "x"), Relations, false},
+	{"note way", []string{"note"}, Way, kv("note", "x"), Ways, false},
+	{"w/highway=primary hit", []string{"w/highway=primary"}, Way, kv("highway", "primary"), Ways, false},
+	{"w/highway=primary other value", []string{"w/highway=primary"}, Way, kv("highway", "secondary"), 0, false},
+	{"w/highway=primary case", []string{"w/highway=primary"}, Way, kv("highway", "Primary"), 0, false},
+	{"w/highway!=primary other value", []string{"w/highway!=primary"}, Way, kv("highway", "secondary"), Ways, false},
+	{"w/highway!=primary same value", []string{"w/highway!=primary"}, Way, kv("highway", "primary"), 0, false},
+	{"w/highway!=primary missing key", []string{"w/highway!=primary"}, Way, kv("name", "x"), 0, false},
+	{"w/highway!=primary no tags", []string{"w/highway!=primary"}, Way, nil, 0, false},
+	{"r/type list boundary", []string{"r/type=multipolygon,boundary"}, Relation, kv("type", "boundary"), Relations, true},
+	{"r/type list route", []string{"r/type=multipolygon,boundary"}, Relation, kv("type", "route"), 0, false},
+	{"key list name:de", []string{"w/name,name:de=Kastanienallee,Kastanienstrasse"}, Way, kv("name:de", "Kastanienstrasse"), Ways, false},
+	{"key list name", []string{"w/name,name:de=Kastanienallee,Kastanienstrasse"}, Way, kv("name", "Kastanienallee"), Ways, false},
+	{"key list wrong key", []string{"w/name,name:de=Kastanienallee,Kastanienstrasse"}, Way, kv("name:en", "Kastanienallee"), 0, false},
+	{"key list partial value", []string{"w/name,name:de=Kastanienallee,Kastanienstrasse"}, Way, kv("name", "Kastanien"), 0, false},
+	{"n/addr:* prefix", []string{"n/addr:*"}, Node, kv("addr:street", "Main"), Nodes, false},
+	{"n/addr:* no colon", []string{"n/addr:*"}, Node, kv("addr", "Main"), 0, false},
+	{"n/addr:* not at start", []string{"n/addr:*"}, Node, kv("xaddr:street", "Main"), 0, false},
+	{"n/name=*Paris substring", []string{"n/name=*Paris"}, Node, kv("name", "Rue de Paris Nord"), Nodes, false},
+	{"n/name=*Paris case", []string{"n/name=*Paris"}, Node, kv("name", "paris"), 0, false},
+	{"a/building way", []string{"a/building"}, Way, kv("building", "yes"), Areas, false},
+	{"a/building node", []string{"a/building"}, Node, kv("building", "yes"), 0, false},
+	{"a/building multipolygon", []string{"a/building"}, Relation, kv("type", "multipolygon", "building", "yes"), Areas, true},
+	{"a/building boundary", []string{"a/building"}, Relation, kv("type", "boundary", "building", "yes"), Areas, true},
+	{"a/building route", []string{"a/building"}, Relation, kv("type", "route", "building", "yes"), Areas, false},
+	{"a/building no type", []string{"a/building"}, Relation, kv("building", "yes"), Areas, false},
+	{"a/building type after hit", []string{"a/building"}, Relation, kv("building", "yes", "type", "multipolygon"), Areas, true},
+	{"r/type=restriction", []string{"r/type=restriction"}, Relation, kv("type", "restriction"), Relations, false},
+	// groups
+	{"core and area from two rules", []string{"w/highway", "a/building"}, Way, kv("highway", "x", "building", "y"), Ways | Areas, false},
+	{"core and area from one rule way", []string{"wa/building"}, Way, kv("building", "yes"), Ways | Areas, false},
+	{"core and area from one rule relation", []string{"wa/building"}, Relation, kv("building", "yes"), Areas, false},
+	{"multipolygon flag without rules", []string{"n/x"}, Relation, kv("type", "boundary"), 0, true},
+	{"multipolygon flag ignored on ways", []string{"w/x"}, Way, kv("type", "multipolygon"), 0, false},
+	{"multipolygon flag ignored on nodes", []string{"n/x"}, Node, kv("type", "multipolygon"), 0, false},
+	{"multipolygon flag needs type key", []string{"a/building"}, Relation, kv("building", "yes", "name", "multipolygon"), Areas, false},
+	{"no expressions", nil, Node, kv("a", "b"), 0, false},
+	{"second expression matches", []string{"n/a", "n/b"}, Node, kv("b", ""), Nodes, false},
+	{"later tag matches", []string{"n/amenity=cafe"}, Node, kv("name", "x", "cuisine", "y", "amenity", "cafe"), Nodes, false},
+	// wildcards and empties
+	{"star any tag", []string{"*"}, Node, kv("foo", "bar"), Nodes, false},
+	{"star no tags", []string{"*"}, Node, nil, 0, false},
+	{"double star", []string{"**"}, Node, kv("foo", "bar"), Nodes, false},
+	{"empty key tag", []string{"=empty"}, Node, kv("", "empty"), Nodes, false},
+	{"empty expression matches empty key", []string{""}, Node, kv("", "x"), Nodes, false},
+	{"empty expression normal key", []string{""}, Node, kv("k", "x"), 0, false},
+	{"n/ empty key", []string{"n/"}, Node, kv("", "x"), Nodes, false},
+	{"k= empty value", []string{"k="}, Node, kv("k", ""), Nodes, false},
+	{"k= non-empty value", []string{"k="}, Node, kv("k", "x"), 0, false},
+	{"k key-only empty value", []string{"k"}, Node, kv("k", ""), Nodes, false},
+	{"highway=* any value", []string{"highway=*"}, Node, kv("highway", ""), Nodes, false},
+	{"x!=* never", []string{"x!=*"}, Node, kv("x", "c"), 0, false},
+	{"highway!= non-empty", []string{"highway!="}, Node, kv("highway", "primary"), Nodes, false},
+	{"highway!= empty", []string{"highway!="}, Node, kv("highway", ""), 0, false},
+	{"highway! key-only", []string{"highway!"}, Node, kv("highway!", "x"), Nodes, false},
+	{"highway! key-only not highway", []string{"highway!"}, Node, kv("highway", "x"), 0, false},
+	// lists, spaces, tabs, bang placement
+	{"list with spaces", []string{"highway=primary , residential"}, Node, kv("highway", "residential"), Nodes, false},
+	{"list literal star", []string{"x=a*,b"}, Node, kv("x", "a*"), Nodes, false},
+	{"list literal star b", []string{"x=a*,b"}, Node, kv("x", "b"), Nodes, false},
+	{"list literal star no prefix", []string{"x=a*,b"}, Node, kv("x", "a"), 0, false},
+	{"substring with comma", []string{"x=*a,b*"}, Node, kv("x", "za,bz"), Nodes, false},
+	{"substring with comma not list", []string{"x=*a,b*"}, Node, kv("x", "a"), 0, false},
+	{"spaces trimmed", []string{" highway = primary "}, Node, kv("highway", "primary"), Nodes, false},
+	{"tab not trimmed", []string{"highway=\tprimary"}, Node, kv("highway", "primary"), 0, false},
+	{"tab kept literally", []string{"highway=\tprimary"}, Node, kv("highway", "\tprimary"), Nodes, false},
+	{"inverted list other", []string{"x!=a,b"}, Node, kv("x", "c"), Nodes, false},
+	{"inverted list member", []string{"x!=a,b"}, Node, kv("x", "a"), 0, false},
+	{"inverted list missing key", []string{"x!=a,b"}, Node, kv("y", "c"), 0, false},
+	{"space before bang inverted", []string{"highway !=primary"}, Node, kv("highway", "secondary"), Nodes, false},
+	{"space after bang not inverted", []string{"highway! =primary"}, Node, kv("highway", "secondary"), 0, false},
+	{"later slash literal", []string{"n/x/y=z"}, Node, kv("x/y", "z"), Nodes, false},
+	{"triple star substring star", []string{"x=***"}, Node, kv("x", "a*b"), Nodes, false},
+	{"triple star no star", []string{"x=***"}, Node, kv("x", "ab"), 0, false},
+}
+
+// runCase feeds every tag, checks that each Tag return equals Hits, then
+// checks the final Hits and Multipolygon against the case.
+func runCase(t *testing.T, f *Filter, c tagCase) {
+	t.Helper()
+	m := f.Matcher()
+	m.Begin(c.kind)
+	for _, tg := range c.tags {
+		if r := m.Tag([]byte(tg[0]), []byte(tg[1])); r != m.Hits() {
+			t.Errorf("%s: Tag returned %d but Hits is %d", c.name, r, m.Hits())
+		}
+	}
+	if m.Hits() != c.hits || m.Multipolygon() != c.mp {
+		t.Errorf("%s: hits=%d mp=%v, want hits=%d mp=%v", c.name, m.Hits(), m.Multipolygon(), c.hits, c.mp)
+	}
+}
+
+func TestConformance(t *testing.T) {
+	for _, c := range conformance {
+		runCase(t, MustCompile(c.exprs...), c)
+	}
+}
+
+func TestBeginResets(t *testing.T) {
+	m := MustCompile("w/highway", "a/building").Matcher()
+	m.Begin(Way)
+	m.Tag([]byte("highway"), []byte("x"))
+	m.Tag([]byte("building"), []byte("y"))
+	m.Begin(Way)
+	if m.Hits() != 0 {
+		t.Fatalf("hits after Begin = %d", m.Hits())
+	}
+	m.Begin(Relation)
+	m.Tag([]byte("type"), []byte("boundary"))
+	m.Begin(Relation)
+	if m.Multipolygon() {
+		t.Fatal("multipolygon survived Begin")
+	}
+}
+
+func TestBeginInvalidKindPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r != "osmtf: invalid Kind" {
+			t.Fatalf("recovered %v", r)
+		}
+	}()
+	m := MustCompile("n/a").Matcher()
+	m.Begin(Kind(3))
+}
+
+func TestTagBeforeBegin(t *testing.T) {
+	m := MustCompile("n/a", "w/a").Matcher()
+	if got := m.Tag([]byte("a"), nil); got != Nodes {
+		t.Fatalf("Tag before Begin = %d, want Nodes", got)
+	}
+}
+
+func TestNilKeyValue(t *testing.T) {
+	m := MustCompile("=").Matcher()
+	m.Begin(Node)
+	if m.Tag(nil, nil) != Nodes {
+		t.Fatal("nil key and value did not match the empty rule")
+	}
+	m = MustCompile("k").Matcher()
+	m.Begin(Node)
+	if m.Tag([]byte("k"), nil) != Nodes {
+		t.Fatal("nil value did not match the key-only rule")
+	}
+	m.Begin(Node)
+	if m.Tag([]byte{}, []byte{}) != 0 {
+		t.Fatal("empty key matched a rule for key k")
+	}
+}
+
+func TestDuplicateKeys(t *testing.T) {
+	m := MustCompile("w/highway=primary").Matcher()
+	m.Begin(Way)
+	m.Tag([]byte("highway"), []byte("secondary"))
+	m.Tag([]byte("highway"), []byte("primary"))
+	if m.Hits() != Ways {
+		t.Fatalf("hits = %d, want Ways", m.Hits())
+	}
+	m = MustCompile("n/x").Matcher()
+	m.Begin(Relation)
+	m.Tag([]byte("type"), []byte("multipolygon"))
+	m.Tag([]byte("type"), []byte("route"))
+	if !m.Multipolygon() {
+		t.Fatal("multipolygon flag was cleared by a later type tag")
+	}
+}
