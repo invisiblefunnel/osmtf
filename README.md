@@ -18,29 +18,36 @@ go get github.com/invisiblefunnel/osmtf
 
 ## Usage
 
+Select footways, paths, pedestrian streets, and steps with a way-only
+expression and a comma-separated list of highway values. Compile once and
+reuse a single matcher:
+
 ```go
-f := osmtf.MustCompile("w/highway", "a/building")
+f := osmtf.MustCompile("w/highway=footway,path,pedestrian,steps")
 m := f.Matcher()
 
 // Start every way with its actual geometry, before feeding tags.
-refs := []int64{1, 2, 3, 1}
+refs := []int64{101, 102, 103}
 n := len(refs)
 closed := n > 0 && refs[0] == refs[n-1] // Also safe for an empty way.
 m.BeginWay(n, closed)
-m.Tag([]byte("building"), []byte("yes"))
+for _, tag := range [][2]string{
+	{"highway", "footway"},
+	{"name", "Riverside Walk"},
+	{"surface", "gravel"},
+} {
+	m.TagString(tag[0], tag[1])
+}
 fmt.Println(m.Matches()) // true
-
-// A relation's first type tag determines whether it is an area.
-m.BeginRelation()
-m.TagString("building", "yes")
-fmt.Println(m.Matches()) // false: the relation's type is not yet known
-m.TagString("type", "multipolygon")
-fmt.Println(m.Matches()) // true
-
-m.BeginNode()
-m.TagString("building", "yes")
-fmt.Println(m.Matches()) // false: a/building does not apply to nodes
 ```
+
+`w/` limits the expression to ways; the values after `=` are alternatives.
+`TagString` consumes strings without copying; use `Tag` for byte slices.
+
+This selects highway classes without evaluating access restrictions.
+[OSMnx's full `walk` filter](https://github.com/gboeing/osmnx/blob/74e68ce2200b23c04f6ec2a864a6c24859bbf08d/osmnx/_overpass.py#L96-L108)
+also combines access, area, and sidewalk exclusions across tags. Osmium
+expressions combine with OR, so one filter cannot express that full predicate.
 
 Call `BeginNode`, `BeginWay`, or `BeginRelation` before each object's tags.
 Every way requires its real reference count and closedness, even for a
@@ -56,13 +63,14 @@ needs its own matcher; do not copy one while matching an object.
 
 ### Stopping early
 
-`Tag` and `TagString` return nothing. `Matches` can be called after any tag:
-a true result stays true until the next object starts; a false result is
-final only after every tag. A decoder may stop feeding tags once `Matches`
-is true, but must still advance to the next object and check decoding errors.
-In particular, a dense-node tag scanner may span many objects and need to
-be drained even after a match. Early stopping is optional; it is not a
-promise of faster decoding.
+`Tag` and `TagString` return nothing. A true `Matches` result stays true until
+the next object starts; a false result is final only after every tag. Once
+the matcher returns true, it needs no further tags.
+
+Always advance the decoder to the next object and check decoding errors,
+even after a match. A dense-node tag scanner may span many objects and need
+to be drained. Early stopping is optional; it is not a promise of faster
+decoding.
 
 ### Skipping object kinds
 
@@ -92,6 +100,8 @@ only `\r`, becomes an empty-key rule, as in osmium.
 
 ## Semantics
 
+- Multiple expressions are combined with OR: an object matches if any tag
+  matches any expression.
 - Type prefixes `n/`, `w/`, `r/`, and `a/` restrict an expression to nodes,
   ways, relations, or areas, and combine, as in `nw/highway`. With no prefix,
   or a bare `/`, an expression applies to nodes, ways, and relations. Any
