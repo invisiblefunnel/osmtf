@@ -21,7 +21,8 @@ import (
 // osmium binary's tags-filter over it for every diffExpressionSets entry, and
 // requires the surviving object IDs to equal what Matcher.Matches
 // gives, and every surviving kind to be one CanMatch allows. Sets that do not
-// compile must make osmium fail too.
+// compile must make osmium fail too. It then does the same for expressions
+// files, read by osmium with -e and here by ReadExpressions.
 func TestOsmiumDifferential(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipped in -short mode")
@@ -53,14 +54,28 @@ func TestOsmiumDifferential(t *testing.T) {
 			tagged++
 		}
 	}
-	if got, err := runOsmium(osmium, file, []string{"*"}); err != nil || len(got) != tagged {
+	if got, err := runOsmium(osmium, file, "", []string{"*"}); err != nil || len(got) != tagged {
 		t.Fatalf(`osmium "*" returned %d objects (err %v), corpus has %d tagged`, len(got), err, tagged)
 	}
 
 	for _, exprs := range diffExpressionSets() {
 		f, err := Compile(exprs...)
-		want, osmErr := runOsmium(osmium, file, exprs)
+		want, osmErr := runOsmium(osmium, file, "", exprs)
 		checkAgainstOsmium(t, fmt.Sprintf("exprs %q", exprs), objs, f, err, want, osmErr)
+	}
+
+	exprFile := filepath.Join(t.TempDir(), "expressions.txt")
+	for _, c := range diffExpressionFiles() {
+		if err := os.WriteFile(exprFile, []byte(c.text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		exprs, err := ReadExpressions(strings.NewReader(c.text))
+		if err != nil {
+			t.Fatalf("ReadExpressions(%q): %v", c.text, err)
+		}
+		f, err := Compile(append(exprs, c.cli...)...)
+		want, osmErr := runOsmium(osmium, file, exprFile, c.cli)
+		checkAgainstOsmium(t, fmt.Sprintf("file %q with %q", c.text, c.cli), objs, f, err, want, osmErr)
 	}
 }
 
@@ -152,11 +167,18 @@ func writeOSMXML(w io.Writer, objs []osmObject) error {
 	return bw.Flush()
 }
 
-// runOsmium runs osmium tags-filter -R over file with exprs and returns the
-// first token of every OPL line it prints, which names a kept object: "n1",
-// "w10", "r20". A non-zero exit is an error whose text includes stderr.
-func runOsmium(osmium, file string, exprs []string) (map[string]bool, error) {
-	cmd := exec.Command(osmium, append([]string{"tags-filter", "-R", "-f", "opl", file}, exprs...)...)
+// runOsmium runs osmium tags-filter -R over file with exprs on the command
+// line and, when exprFile is not empty, the expressions file exprFile. It
+// returns the first token of every OPL line osmium prints, which names a
+// kept object: "n1", "w10", "r20". A non-zero exit is an error whose text
+// includes stderr.
+func runOsmium(osmium, file, exprFile string, exprs []string) (map[string]bool, error) {
+	args := []string{"tags-filter", "-R", "-f", "opl"}
+	if exprFile != "" {
+		args = append(args, "-e", exprFile)
+	}
+	args = append(append(args, file), exprs...)
+	cmd := exec.Command(osmium, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
@@ -289,6 +311,34 @@ func diffCorpus() []osmObject {
 		objs = append(objs, o)
 	}
 	return objs
+}
+
+// diffExpressionFiles returns expressions files, as text, each with the
+// command-line expressions to add to it. They cover what ReadExpressions
+// must get right: comments, including ones that cut an expression, CRLF
+// line ends, lines that still count as an expression once cut, and an
+// invalid type letter.
+func diffExpressionFiles() []struct {
+	text string
+	cli  []string
+} {
+	return []struct {
+		text string
+		cli  []string
+	}{
+		{"", nil},
+		{"# nothing\n", nil},
+		{"# cafes and roads\nn/amenity   # trailing comment\r\n\r\nw/highway=primary\n\nnw/highway\r\na/building", nil},
+		{"x=a#,b\n", nil},      // x=a, not the list x=a,b
+		{"   \n", nil},         // an empty-key rule, as is
+		{"\r\n", nil},          // this one, and
+		{"  # comment\n", nil}, // this one
+		{"n/amenity\r# comment\n", nil},
+		{"amenity\r\r\n", nil}, // the key is "amenity\r", so nothing matches
+		{"n/amenity\n", []string{"w/highway=primary", "a/building"}},
+		{"n/amenity\nx/foo # bad\n", nil},
+		{" n/amenity\n", nil}, // the space is an unknown type letter; nothing is trimmed
+	}
 }
 
 // diffExpressionSets returns hand-picked expression sets, each man page

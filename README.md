@@ -71,6 +71,25 @@ osmium does: skip nodes when `!f.CanMatch(osmtf.Node)`, and likewise for
 `osmtf.Way` and `osmtf.Relation`. Area expressions enable ways and relations:
 `osmtf.MustCompile("a/building")` can match both, but cannot match nodes.
 
+### Expression files
+
+`ReadExpressions` reads an expressions file as `osmium tags-filter -e` does,
+one expression per line with `#` starting a comment, and returns the
+expressions for `Compile`, which can take command-line expressions alongside:
+
+```go
+exprs, err := osmtf.ReadExpressions(file)
+if err != nil {
+	return err
+}
+f, err := osmtf.Compile(append(exprs, cliExprs...)...)
+```
+
+Each line is cut at its first `#`, even mid-expression, so `name=a#b` becomes
+`name=a`. A line with nothing left is skipped; otherwise one trailing `\r` is
+dropped and the rest is an expression, unchanged. So a line of only spaces, or
+only `\r`, becomes an empty-key rule, as in osmium.
+
 ## Semantics
 
 - Type prefixes `n/`, `w/`, `r/`, and `a/` restrict an expression to nodes,
@@ -100,12 +119,6 @@ osmium does: skip nodes when `!f.CanMatch(osmtf.Node)`, and likewise for
 
 ## Not in scope
 
-- Expression files (`osmium tags-filter -e`). To read one as osmium does,
-  split it into lines at `\n` and cut each line at its first `#`, even
-  mid-expression (`name=a#b` becomes `name=a`). Skip the line only if nothing
-  is left; otherwise drop one trailing `\r` and pass the rest to `Compile`
-  unchanged. So a line of only spaces, or only `\r`, becomes an empty-key
-  rule, as in osmium.
 - Referenced-object completion, the CLI's default of also writing the nodes of
   matching ways and the members of matching relations. Each object is matched
   on its own, as with `osmium tags-filter -R`.
