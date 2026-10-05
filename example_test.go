@@ -48,3 +48,56 @@ func ExampleFilter_CanMatch() {
 	fmt.Println(f.CanMatch(osmtf.Node), f.CanMatch(osmtf.Way), f.CanMatch(osmtf.Relation))
 	// Output: false true true
 }
+
+func ExampleAll() {
+	highway := osmtf.MustCompile("w/highway").Matcher()
+	excluded := osmtf.MustCompile("w/foot=*no*").Matcher()
+	m := osmtf.All(&highway, osmtf.Not(&excluded))
+
+	refs := []int64{101, 102, 103}
+	n := len(refs)
+	closed := n > 0 && refs[0] == refs[n-1]
+	m.BeginWay(n, closed)
+	m.TagString("highway", "path")
+	fmt.Println(m.Matches()) // This way has no restriction tags.
+
+	m.BeginWay(n, closed)
+	m.TagString("highway", "path")
+	m.TagString("foot", "no")
+	// Read the final result only after all tags: the foot tag rejects the way.
+	fmt.Println(m.Matches())
+	// Output:
+	// true
+	// false
+}
+
+func ExampleAny() {
+	cafe := osmtf.MustCompile("n/amenity=cafe").Matcher()
+	bakery := osmtf.MustCompile("n/shop=bakery").Matcher()
+	m := osmtf.Any(&cafe, &bakery)
+
+	m.BeginNode()
+	m.TagString("name", "Corner Bakery")
+	m.TagString("shop", "bakery")
+	fmt.Println(m.Matches())
+	// Output: true
+}
+
+func ExampleNot() {
+	prohibited := osmtf.MustCompile("w/foot=*no*").Matcher()
+	m := osmtf.Not(&prohibited)
+
+	// Negation includes kinds that the child cannot match.
+	m.BeginNode()
+	m.TagString("foot", "no")
+	fmt.Println(m.Matches())
+
+	refs := []int64{101, 102}
+	n := len(refs)
+	m.BeginWay(n, n > 0 && refs[0] == refs[n-1])
+	m.TagString("foot", "no")
+	fmt.Println(m.Matches())
+	// Output:
+	// true
+	// false
+}

@@ -10,6 +10,10 @@
 // node IDs are the same. Osmium applies area rules to closed ways with at
 // least four references and to relations whose first type tag is multipolygon
 // or boundary. Matcher tracks relation type tags itself.
+//
+// All, Any, and Not compose ObjectMatchers by combining their per-object
+// results. Feed every tag before using a composition's result as final:
+// negation can turn a true result false when a later tag arrives.
 package osmtf
 
 import "fmt"

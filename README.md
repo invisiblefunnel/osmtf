@@ -48,6 +48,8 @@ This selects highway classes without evaluating access restrictions.
 [OSMnx's full `walk` filter](https://github.com/gboeing/osmnx/blob/74e68ce2200b23c04f6ec2a864a6c24859bbf08d/osmnx/_overpass.py#L96-L108)
 also combines access, area, and sidewalk exclusions across tags. Osmium
 expressions combine with OR, so one filter cannot express that full predicate.
+Use [matcher composition](#composing-matchers) to combine a required highway
+match with a negated exclusion match.
 
 Call `BeginNode`, `BeginWay`, or `BeginRelation` before each object's tags.
 Every way requires its real reference count and closedness, even for a
@@ -63,14 +65,50 @@ needs its own matcher; do not copy one while matching an object.
 
 ### Stopping early
 
-`Tag` and `TagString` return nothing. A true `Matches` result stays true until
-the next object starts; a false result is final only after every tag. Once
-the matcher returns true, it needs no further tags.
+`Tag` and `TagString` return nothing. For a concrete `Matcher`, a true
+`Matches` result stays true until the next object starts; a false result is
+final only after every tag. Once the matcher returns true, it needs no
+further tags.
 
 Always advance the decoder to the next object and check decoding errors,
 even after a match. A dense-node tag scanner may span many objects and need
 to be drained. Early stopping is optional; it is not a promise of faster
 decoding.
+
+### Composing matchers
+
+`All`, `Any`, and `Not` accept and return `ObjectMatcher`, the streaming
+interface implemented by `*Matcher`. They combine results for whole objects,
+so different children of `All` can match different tags. For example, require
+a highway tag and reject foot prohibitions:
+
+```go
+highway := osmtf.MustCompile("w/highway").Matcher()
+excluded := osmtf.MustCompile("w/foot=*no*").Matcher()
+m := osmtf.All(&highway, osmtf.Not(&excluded))
+
+refs := []int64{101, 102, 103}
+n := len(refs)
+m.BeginWay(n, n > 0 && refs[0] == refs[n-1])
+m.TagString("highway", "path")
+m.TagString("foot", "no")
+fmt.Println(m.Matches()) // false
+```
+
+Feed every tag before using a composition's result as final. A later tag
+can turn a true result false through `Not`. Every child receives every tag,
+even when another child has already matched. `All()` always matches and
+`Any()` never matches.
+
+`Not` complements the whole result, including kind restrictions. Negating
+`w/foot=*no*` allows missing `foot` tags and matches nodes and relations; the
+required `w/highway` child above keeps the composition restricted to ways.
+`CanMatch` remains on `Filter`; a required positive filter can still be used
+to skip object kinds.
+
+The combinators retain their child matchers. Construct one composition per
+worker and drive it through the outer matcher. With `*Matcher` leaves,
+reusing a composition allocates nothing; construction may allocate.
 
 ### Skipping object kinds
 
@@ -132,4 +170,3 @@ only `\r`, becomes an empty-key rule, as in osmium.
 - Referenced-object completion, the CLI's default of also writing the nodes of
   matching ways and the members of matching relations. Each object is matched
   on its own, as with `osmium tags-filter -R`.
-- `--invert-match`. Negate the result with `!` at the call site.
