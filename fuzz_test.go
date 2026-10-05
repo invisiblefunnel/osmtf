@@ -72,20 +72,20 @@ func (o oracleMatcher) match(s string) bool {
 
 // oracleRule is the oracle's form of one expression.
 type oracleRule struct {
-	types      Types
+	types      ruleTypes
 	key, value oracleMatcher
 	want       bool // false when inverted
 }
 
 // oracleTypeLetters maps the type letters allowed before the first '/' to
 // their groups.
-var oracleTypeLetters = map[byte]Types{'n': Nodes, 'w': Ways, 'r': Relations, 'a': Areas}
+var oracleTypeLetters = map[byte]ruleTypes{'n': nodes, 'w': ways, 'r': relations, 'a': areas}
 
 // oracleParse parses expr with osmium's grammar, [TYPES/]REST. It returns
 // the offset of the first byte before the first '/' that is not a type
 // letter, or -1 when expr is valid.
 func oracleParse(expr string) (oracleRule, int) {
-	r := oracleRule{types: Nodes | Ways | Relations, want: true}
+	r := oracleRule{types: nodes | ways | relations, want: true}
 	rest := expr
 	if slash := strings.IndexByte(expr, '/'); slash >= 0 {
 		if slash > 0 {
@@ -121,8 +121,8 @@ func oracleParse(expr string) (oracleRule, int) {
 // area rule. For a relation, mp comes from its first type tag alone, as
 // osmium's get_value_by_key("type") does: true when that tag's value is
 // multipolygon or boundary.
-func oracleMatch(rules []oracleRule, kind Kind, tags [][2]string) (hits Types, mp bool) {
-	own := [...]Types{Node: Nodes, Way: Ways, Relation: Relations}[kind]
+func oracleMatch(rules []oracleRule, kind Kind, tags [][2]string) (hits ruleTypes, mp bool) {
+	own := [...]ruleTypes{Node: nodes, Way: ways, Relation: relations}[kind]
 	typeSeen := false
 	for _, tag := range tags {
 		k, v := tag[0], tag[1]
@@ -133,8 +133,8 @@ func oracleMatch(rules []oracleRule, kind Kind, tags [][2]string) (hits Types, m
 		}
 		if kind != Node {
 			for _, r := range rules {
-				if r.types&Areas != 0 && r.key.match(k) && r.value.match(v) == r.want {
-					hits |= Areas
+				if r.types&areas != 0 && r.key.match(k) && r.value.match(v) == r.want {
+					hits |= areas
 				}
 			}
 		}
@@ -220,15 +220,37 @@ func FuzzMatchAgainstOracle(f *testing.F) {
 			}
 			return
 		}
-		m := fl.Matcher()
-		m.Begin(k)
-		for _, tg := range tags {
-			m.Tag([]byte(tg[0]), []byte(tg[1]))
-		}
 		wantHits, wantMP := oracleMatch(rules, k, tags)
-		if m.Hits() != wantHits || m.Multipolygon() != wantMP {
-			t.Fatalf("exprs %q kind %d tags %q: hits=%d mp=%v, oracle hits=%d mp=%v",
-				exprs, k, tags, m.Hits(), m.Multipolygon(), wantHits, wantMP)
+		geometries := wayGeometries[:1]
+		if k == Way {
+			geometries = wayGeometries
+		}
+		for _, w := range geometries {
+			m, ms, early := fl.Matcher(), fl.Matcher(), fl.Matcher()
+			beginObject(&m, k, w.n, w.closed)
+			beginObject(&ms, k, w.n, w.closed)
+			beginObject(&early, k, w.n, w.closed)
+			for _, tg := range tags {
+				m.Tag([]byte(tg[0]), []byte(tg[1]))
+				ms.TagString(tg[0], tg[1])
+				if !early.Matches() {
+					early.TagString(tg[0], tg[1])
+				}
+			}
+			applicableHits := wantHits
+			if k == Way && !(w.closed && w.n >= 4) {
+				applicableHits &^= areas
+			}
+			if m.hits != applicableHits || m.multipolygon != wantMP {
+				t.Fatalf("exprs %q kind %d geometry=%+v tags %q: hits=%d mp=%v, oracle hits=%d mp=%v",
+					exprs, k, w, tags, m.hits, m.multipolygon, applicableHits, wantMP)
+			}
+			want := wantHits&(nodes|ways|relations) != 0 ||
+				(wantHits&areas != 0 && ((k == Way && w.closed && w.n >= 4) || wantMP))
+			if m.Matches() != want || ms.Matches() != want || early.Matches() != want {
+				t.Fatalf("exprs %q kind %d geometry=%+v tags %q: byte=%v string=%v early=%v, oracle=%v",
+					exprs, k, w, tags, m.Matches(), ms.Matches(), early.Matches(), want)
+			}
 		}
 	})
 }

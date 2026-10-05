@@ -1,6 +1,9 @@
 package osmtf
 
-import "bytes"
+import (
+	"bytes"
+	"unsafe"
+)
 
 // match reports whether b matches s's pattern.
 func (s *strMatcher) match(b []byte) bool {
@@ -32,33 +35,55 @@ func (r *rule) match(key, value []byte) bool {
 	return r.key.match(key) && (r.value.match(value) == r.want)
 }
 
-// Matcher is per-object state. It is a value type and allocates nothing.
-// The zero Matcher is not usable; obtain one from Filter.Matcher.
+// Matcher is reusable per-object state. It is a value type and allocates
+// nothing. The zero Matcher is not usable; obtain one from Filter.Matcher.
+// Start each object with BeginNode, BeginWay, or BeginRelation before feeding
+// its tags. Do not copy a Matcher while matching an object or use it from
+// more than one goroutine at a time.
 type Matcher struct {
 	f            *Filter
 	kind         Kind
-	hits         Types // groups matched since Begin
-	multipolygon bool  // the relation's first type tag is type=multipolygon or type=boundary
-	typeSeen     bool  // a relation tag with key type was seen; later ones are ignored
+	hits         ruleTypes // groups matched since the object's start
+	areaWay      bool      // this way is closed and has at least four references
+	multipolygon bool      // the relation's first type tag is multipolygon or boundary
+	typeSeen     bool      // later relation type tags are ignored
 }
 
-// Matcher returns a Matcher for f, in the state Begin(Node) would leave it.
-// Call Begin before each object's tags. A Matcher must not be used by more
-// than one goroutine at a time, but any number of Matchers may share f.
+// Matcher returns a Matcher for f, in the state BeginNode would leave it.
+// Any number of Matchers may share f. Call the appropriate Begin method
+// before each object's tags.
 func (f *Filter) Matcher() Matcher {
 	return Matcher{f: f}
 }
 
-// Begin resets the state for a new object of the given kind.
-// It panics with "osmtf: invalid Kind" if kind is not Node, Way, or Relation.
-func (m *Matcher) Begin(kind Kind) {
-	if kind > Relation {
-		panic("osmtf: invalid Kind")
+// BeginNode resets the state for a new node.
+// It panics with "osmtf: zero Matcher; use Filter.Matcher" on a zero Matcher.
+func (m *Matcher) BeginNode() {
+	m.begin(Node, false)
+}
+
+// BeginWay resets the state for a new way. Supply real geometry for every
+// way, regardless of the filter: nodeCount is the length of its node reference
+// list (including the repeated final reference of a closed way), and closed
+// reports whether the first and last references are equal. For an empty list,
+// pass 0 and false. Area rules apply only when closed and nodeCount >= 4.
+// It panics with "osmtf: zero Matcher; use Filter.Matcher" on a zero Matcher.
+func (m *Matcher) BeginWay(nodeCount int, closed bool) {
+	m.begin(Way, closed && nodeCount >= 4)
+}
+
+// BeginRelation resets the state for a new relation. The first type tag
+// determines whether area rules apply; subsequent type tags are ignored.
+// It panics with "osmtf: zero Matcher; use Filter.Matcher" on a zero Matcher.
+func (m *Matcher) BeginRelation() {
+	m.begin(Relation, false)
+}
+
+func (m *Matcher) begin(kind Kind, areaWay bool) {
+	if m.f == nil {
+		panic("osmtf: zero Matcher; use Filter.Matcher")
 	}
-	m.kind = kind
-	m.hits = 0
-	m.multipolygon = false
-	m.typeSeen = false
+	*m = Matcher{f: m.f, kind: kind, areaWay: areaWay}
 }
 
 // The key and values that Tag checks a relation's first type tag against, as
@@ -69,25 +94,15 @@ var (
 	valBoundary     = []byte("boundary")
 )
 
-// Tag tests one key/value pair and returns the hits so far, identical to
-// what Hits would return. Neither slice is retained.
-//
-// The caller may stop feeding tags early, but then only the bits already set
-// are meaningful: an unset bit, or a false Multipolygon, is final only after
-// every tag. Stop early only once the combination formula in the package doc
-// is already true for the object. Stopping on any hit,
-//
-//	if m.Tag(k, v) != 0 {
-//		break
-//	}
-//
-// loses relations whose type tag comes after the area hit, and open ways
-// whose Areas hit precedes the tag that would hit a way rule.
-func (m *Matcher) Tag(key, value []byte) Types {
+// Tag tests one key/value pair. Neither slice is retained or modified.
+// The caller may stop feeding an object's tags once Matches is true, but
+// must still advance its decoder and check decoding errors. A false Matches
+// result is final only after every tag.
+func (m *Matcher) Tag(key, value []byte) {
 	f := m.f
 	// The core and area groups are each evaluated only while their bit is
-	// unset; once set, a bit stays set until the next Begin.
-	kindBit := Types(1) << m.kind
+	// unset; once set, a bit stays set until the next object's start.
+	kindBit := ruleTypes(1) << m.kind
 	if m.hits&kindBit == 0 {
 		for _, i := range f.core[m.kind] {
 			if f.rules[i].match(key, value) {
@@ -96,10 +111,10 @@ func (m *Matcher) Tag(key, value []byte) Types {
 			}
 		}
 	}
-	if m.kind != Node && m.hits&Areas == 0 {
+	if (m.areaWay || m.kind == Relation) && m.hits&areas == 0 {
 		for _, i := range f.area {
 			if f.rules[i].match(key, value) {
-				m.hits |= Areas
+				m.hits |= areas
 				break
 			}
 		}
@@ -110,19 +125,21 @@ func (m *Matcher) Tag(key, value []byte) Types {
 		m.typeSeen = true
 		m.multipolygon = bytes.Equal(value, valMultipolygon) || bytes.Equal(value, valBoundary)
 	}
-	return m.hits
 }
 
-// Hits reports which rule groups have matched since Begin: the kind's own
-// bit (Nodes, Ways, or Relations) for a core hit, and Areas for an area
-// rule hit. The package doc shows how to combine them into osmium's result.
-func (m *Matcher) Hits() Types {
-	return m.hits
+// TagString is Tag for a key and value held as strings. It hands the strings'
+// bytes to Tag without copying, which is safe because Tag neither writes to
+// nor retains its slices.
+func (m *Matcher) TagString(key, value string) {
+	m.Tag(unsafe.Slice(unsafe.StringData(key), len(key)),
+		unsafe.Slice(unsafe.StringData(value), len(value)))
 }
 
-// Multipolygon reports whether the relation's first type tag seen since
-// Begin has the value multipolygon or boundary, osmium's rule for when a
-// relation counts as an area. Always false for other kinds.
-func (m *Matcher) Multipolygon() bool {
-	return m.multipolygon
+// Matches reports osmium's result for the current object, including area
+// rules when its way geometry or first relation type tag qualifies. A true
+// result stays true until the next BeginNode, BeginWay, or BeginRelation.
+// A false result is final only after the last tag. Before any tags, Matches
+// returns false.
+func (m *Matcher) Matches() bool {
+	return m.hits&^areas != 0 || (m.hits&areas != 0 && (m.areaWay || m.multipolygon))
 }

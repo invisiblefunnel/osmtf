@@ -5,11 +5,10 @@ expressions, mirroring the expression language and matching rules of
 `osmium tags-filter`. It was verified against osmium-tool 1.19.0 by a
 differential test that runs the `osmium` binary on PATH. It is built for the
 hot loop of a PBF or XML decoder: expressions are compiled once into a
-`Filter`, and each object's tags are streamed into a `Matcher` one key/value
-pair at a time, as byte slices, with `Tag` returning the hits so far, so the
-caller can stop early. Matching allocates nothing and never retains the
-caller's slices. A `Filter` is immutable and safe to share across goroutines,
-each with its own `Matcher`.
+`Filter`, each object's tags are streamed into a `Matcher` one key/value pair
+at a time, as byte slices or strings, and `Matches` gives osmium's result.
+Matching allocates nothing and never retains the caller's slices. A `Filter`
+is immutable and safe to share across goroutines, each with its own `Matcher`.
 
 ## Install
 
@@ -23,43 +22,54 @@ go get github.com/invisiblefunnel/osmtf
 f := osmtf.MustCompile("w/highway", "a/building")
 m := f.Matcher()
 
-// A way tagged building=yes, fed one tag at a time by a decoder.
-m.Begin(osmtf.Way)
+// Start every way with its actual geometry, before feeding tags.
+refs := []int64{1, 2, 3, 1}
+n := len(refs)
+closed := n > 0 && refs[0] == refs[n-1] // Also safe for an empty way.
+m.BeginWay(n, closed)
 m.Tag([]byte("building"), []byte("yes"))
-h := m.Hits()
+fmt.Println(m.Matches()) // true
 
-// The caller combines hits with geometry it already knows.
-closedWith5Nodes := osmtf.IsAreaWay(5, true)
-openWith5Nodes := osmtf.IsAreaWay(5, false)
-fmt.Println(h&osmtf.Ways != 0 || (h&osmtf.Areas != 0 && closedWith5Nodes)) // true
-fmt.Println(h&osmtf.Ways != 0 || (h&osmtf.Areas != 0 && openWith5Nodes))   // false
+// A relation's first type tag determines whether it is an area.
+m.BeginRelation()
+m.TagString("building", "yes")
+fmt.Println(m.Matches()) // false: the relation's type is not yet known
+m.TagString("type", "multipolygon")
+fmt.Println(m.Matches()) // true
 
-// In general, osmium's result for each kind of object is as follows, where n
-// is a way's node count and closed says whether its first and last node IDs
-// are the same.
-nodeMatches := h&osmtf.Nodes != 0
-wayMatches := h&osmtf.Ways != 0 || (h&osmtf.Areas != 0 && osmtf.IsAreaWay(n, closed))
-relationMatches := h&osmtf.Relations != 0 || (h&osmtf.Areas != 0 && m.Multipolygon())
+m.BeginNode()
+m.TagString("building", "yes")
+fmt.Println(m.Matches()) // false: a/building does not apply to nodes
 ```
+
+Call `BeginNode`, `BeginWay`, or `BeginRelation` before each object's tags.
+Every way requires its real reference count and closedness, even for a
+filter containing only `w/highway`. `Compile` accepts all osmium expressions,
+including `a/` and combined prefixes such as `na/`; the decoder follows the
+same path regardless of which expressions a user supplies. Geometry-free
+way matching is outside this interface. Decoders that deliver tags before
+references must buffer until they know the geometry.
+
+Obtain matchers from `Filter.Matcher`; each start method panics with
+`osmtf: zero Matcher; use Filter.Matcher` on a zero matcher. Each worker
+needs its own matcher; do not copy one while matching an object.
 
 ### Stopping early
 
-`Tag` returns the hits so far, so a decoder can stop feeding tags early, but
-then only the bits already set are meaningful: an unset bit, or a false
-`Multipolygon`, is final only after every tag. Stop early only once the
-formula above is already true for the object. Stopping on any hit, as in
-`if m.Tag(k, v) != 0 { break }`, loses relations whose `type` tag comes after
-the area hit, and open ways whose `Areas` hit precedes the tag that would hit
-a way rule.
+`Tag` and `TagString` return nothing. `Matches` can be called after any tag:
+a true result stays true until the next object starts; a false result is
+final only after every tag. A decoder may stop feeding tags once `Matches`
+is true, but must still advance to the next object and check decoding errors.
+In particular, a dense-node tag scanner may span many objects and need to
+be drained even after a match. Early stopping is optional; it is not a
+promise of faster decoding.
 
 ### Skipping object kinds
 
-`Filter.Types` tells a decoder which kinds of object it may skip, as osmium
-does: nodes when `f.Types()&osmtf.Nodes == 0`, ways when
-`f.Types()&(osmtf.Ways|osmtf.Areas) == 0`, and relations when
-`f.Types()&(osmtf.Relations|osmtf.Areas) == 0`. `Areas` is a rule group, not
-a kind of object: `a/building` alone gives `Types() == osmtf.Areas`, and its
-matches are ways and relations.
+`Filter.CanMatch` tells a decoder which kinds of object it may skip, as
+osmium does: skip nodes when `!f.CanMatch(osmtf.Node)`, and likewise for
+`osmtf.Way` and `osmtf.Relation`. Area expressions enable ways and relations:
+`osmtf.MustCompile("a/building")` can match both, but cannot match nodes.
 
 ## Semantics
 
@@ -81,9 +91,9 @@ matches are ways and relations.
 - `*substring` matches anything that contains `substring`, not only what ends
   with it, as in `n/name=*Paris`. `*substring*` is the same.
 - Area rules (`a/`) apply to closed ways with 4 or more nodes and to relations
-  whose first `type` tag is `multipolygon` or `boundary`. `Hits` reports an
-  area rule hit as `Areas`, and the caller checks the way with `IsAreaWay` or
-  the relation with `Multipolygon`, as in the formula above.
+  whose first `type` tag is `multipolygon` or `boundary`. `BeginWay` supplies
+  geometry and `Matches` applies these rules. An empty way can match a `w/`
+  rule but never an `a/` rule. Later relation `type` tags are ignored.
 - Everything is case sensitive, and there is no escaping.
 - Only ASCII spaces are trimmed, from both ends of each key, value, and list
   item. Tabs and other whitespace are kept.

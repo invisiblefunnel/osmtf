@@ -19,9 +19,9 @@ import (
 
 // TestOsmiumDifferential writes diffCorpus as an OSM XML file, runs the
 // osmium binary's tags-filter over it for every diffExpressionSets entry, and
-// requires the surviving object IDs to equal what Filter and the combination
-// formula in the package doc give. Sets that do not compile must make osmium
-// fail too.
+// requires the surviving object IDs to equal what Matcher.Matches
+// gives, and every surviving kind to be one CanMatch allows. Sets that do not
+// compile must make osmium fail too.
 func TestOsmiumDifferential(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipped in -short mode")
@@ -60,26 +60,40 @@ func TestOsmiumDifferential(t *testing.T) {
 	for _, exprs := range diffExpressionSets() {
 		f, err := Compile(exprs...)
 		want, osmErr := runOsmium(osmium, file, exprs)
-		if err != nil {
-			if osmErr == nil || !strings.Contains(osmErr.Error(), "Unknown object type") {
-				t.Errorf("exprs %q: we rejected (%v) but osmium said %v", exprs, err, osmErr)
-			}
-			continue
+		checkAgainstOsmium(t, fmt.Sprintf("exprs %q", exprs), objs, f, err, want, osmErr)
+	}
+}
+
+// checkAgainstOsmium requires f, with err from compiling what osmium was
+// given, to keep the same objects of objs as osmium did, given its want and
+// osmErr. A compile error is right only when osmium rejected the type letter
+// too.
+func checkAgainstOsmium(t *testing.T, name string, objs []osmObject, f *Filter, err error, want map[string]bool, osmErr error) {
+	t.Helper()
+	if err != nil {
+		if osmErr == nil || !strings.Contains(osmErr.Error(), "Unknown object type") {
+			t.Errorf("%s: we rejected (%v) but osmium said %v", name, err, osmErr)
 		}
-		if osmErr != nil {
-			t.Fatalf("exprs %q: osmium failed: %v", exprs, osmErr)
+		return
+	}
+	if osmErr != nil {
+		t.Fatalf("%s: osmium failed: %v", name, osmErr)
+	}
+	for id := range want {
+		if kind := Kind(strings.IndexByte("nwr", id[0])); !f.CanMatch(kind) {
+			t.Errorf("%s: osmium matched %s but CanMatch(%v) is false", name, id, kind)
 		}
-		got := matchLocally(f, objs)
-		if !maps.Equal(got, want) {
-			for id := range want {
-				if !got[id] {
-					t.Errorf("exprs %q: osmium matched %s, we did not", exprs, id)
-				}
+	}
+	got := matchLocally(f, objs)
+	if !maps.Equal(got, want) {
+		for id := range want {
+			if !got[id] {
+				t.Errorf("%s: osmium matched %s, we did not", name, id)
 			}
-			for id := range got {
-				if !want[id] {
-					t.Errorf("exprs %q: we matched %s, osmium did not", exprs, id)
-				}
+		}
+		for id := range got {
+			if !want[id] {
+				t.Errorf("%s: we matched %s, osmium did not", name, id)
 			}
 		}
 	}
@@ -158,30 +172,26 @@ func runOsmium(osmium, file string, exprs []string) (map[string]bool, error) {
 	return kept, nil
 }
 
-// matchLocally returns the objects f matches, named as runOsmium names them,
-// combining Hits with geometry by the formula in the package doc. Like a
-// decoder, it reads objs in file order and reuses one Matcher, calling Begin
-// per object.
+// matchLocally returns the objects f matches, named as runOsmium names them.
+// Like a decoder, it reads objs in file order, reuses one Matcher, calls
+// the appropriate Begin method per object, then Matches after its tags.
 func matchLocally(f *Filter, objs []osmObject) map[string]bool {
 	matched := map[string]bool{}
 	m := f.Matcher()
 	for _, o := range inFileOrder(objs) {
-		m.Begin(o.kind)
+		switch o.kind {
+		case Node:
+			m.BeginNode()
+		case Way:
+			n := len(o.nodeRefs)
+			m.BeginWay(n, n > 0 && o.nodeRefs[0] == o.nodeRefs[n-1])
+		case Relation:
+			m.BeginRelation()
+		}
 		for _, tag := range o.tags {
 			m.Tag([]byte(tag[0]), []byte(tag[1]))
 		}
-		h := m.Hits()
-		var match bool
-		switch o.kind {
-		case Node:
-			match = h&Nodes != 0
-		case Way:
-			n := len(o.nodeRefs)
-			match = h&Ways != 0 || (h&Areas != 0 && IsAreaWay(n, o.nodeRefs[0] == o.nodeRefs[n-1]))
-		case Relation:
-			match = h&Relations != 0 || (h&Areas != 0 && m.Multipolygon())
-		}
-		if match {
+		if m.Matches() {
 			matched[fmt.Sprintf("%c%d", "nwr"[o.kind], o.id)] = true
 		}
 	}
@@ -218,6 +228,9 @@ func diffCorpus() []osmObject {
 		{kind: Way, id: 13, tags: kv("highway", "primary"), nodeRefs: []int{1, 2, 3, 1}},
 		{kind: Way, id: 14, tags: kv("highway", "primary", "building", "yes"), nodeRefs: []int{1, 2, 3, 4, 1}},
 		{kind: Way, id: 15, nodeRefs: []int{1, 2, 3, 1}},
+		{kind: Way, id: 16, tags: kv("building", "yes", "highway", "residential")},
+		{kind: Way, id: 17, tags: kv("building", "yes"), nodeRefs: []int{1}},
+		{kind: Way, id: 18, tags: kv("building", "yes", "highway", "residential"), nodeRefs: []int{1, 2, 3, 4}},
 		{kind: Relation, id: 20, tags: kv("type", "multipolygon", "building", "yes")},
 		{kind: Relation, id: 21, tags: kv("type", "boundary", "building", "yes")},
 		{kind: Relation, id: 22, tags: kv("type", "route", "building", "yes")},

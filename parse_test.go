@@ -68,7 +68,7 @@ func TestInternSharesBlob(t *testing.T) {
 }
 
 type ruleShape struct {
-	types      Types
+	types      ruleTypes
 	key, value smShape
 	want       bool
 }
@@ -83,7 +83,7 @@ var (
 	sub  = func(p string) smShape { return smShape{kind: matchSubstring, pat: p} }
 	lst  = func(items ...string) smShape { return smShape{kind: matchList, list: items} }
 	anyM = smShape{kind: matchAny}
-	nwr  = Nodes | Ways | Relations
+	nwr  = nodes | ways | relations
 )
 
 var compileShapeCases = []struct {
@@ -91,23 +91,23 @@ var compileShapeCases = []struct {
 	want ruleShape
 }{
 	// man page examples
-	{"n/amenity", ruleShape{Nodes, eq("amenity"), anyM, true}},
-	{"nw/highway", ruleShape{Nodes | Ways, eq("highway"), anyM, true}},
+	{"n/amenity", ruleShape{nodes, eq("amenity"), anyM, true}},
+	{"nw/highway", ruleShape{nodes | ways, eq("highway"), anyM, true}},
 	{"/note", ruleShape{nwr, eq("note"), anyM, true}},
 	{"note", ruleShape{nwr, eq("note"), anyM, true}},
-	{"w/highway=primary", ruleShape{Ways, eq("highway"), eq("primary"), true}},
-	{"w/highway!=primary", ruleShape{Ways, eq("highway"), eq("primary"), false}},
-	{"r/type=multipolygon,boundary", ruleShape{Relations, eq("type"), lst("multipolygon", "boundary"), true}},
-	{"w/name,name:de=Kastanienallee,Kastanienstrasse", ruleShape{Ways, lst("name", "name:de"), lst("Kastanienallee", "Kastanienstrasse"), true}},
-	{"n/addr:*", ruleShape{Nodes, pre("addr:"), anyM, true}},
-	{"n/name=*Paris", ruleShape{Nodes, eq("name"), sub("Paris"), true}},
-	{"a/building", ruleShape{Areas, eq("building"), anyM, true}},
-	{"r/type=restriction", ruleShape{Relations, eq("type"), eq("restriction"), true}},
+	{"w/highway=primary", ruleShape{ways, eq("highway"), eq("primary"), true}},
+	{"w/highway!=primary", ruleShape{ways, eq("highway"), eq("primary"), false}},
+	{"r/type=multipolygon,boundary", ruleShape{relations, eq("type"), lst("multipolygon", "boundary"), true}},
+	{"w/name,name:de=Kastanienallee,Kastanienstrasse", ruleShape{ways, lst("name", "name:de"), lst("Kastanienallee", "Kastanienstrasse"), true}},
+	{"n/addr:*", ruleShape{nodes, pre("addr:"), anyM, true}},
+	{"n/name=*Paris", ruleShape{nodes, eq("name"), sub("Paris"), true}},
+	{"a/building", ruleShape{areas, eq("building"), anyM, true}},
+	{"r/type=restriction", ruleShape{relations, eq("type"), eq("restriction"), true}},
 	// types
-	{"nwra/x", ruleShape{Nodes | Ways | Relations | Areas, eq("x"), anyM, true}},
-	{"nn/amenity", ruleShape{Nodes, eq("amenity"), anyM, true}},
-	{"n/", ruleShape{Nodes, eq(""), anyM, true}},
-	{"n/x/y=z", ruleShape{Nodes, eq("x/y"), eq("z"), true}},
+	{"nwra/x", ruleShape{nodes | ways | relations | areas, eq("x"), anyM, true}},
+	{"nn/amenity", ruleShape{nodes, eq("amenity"), anyM, true}},
+	{"n/", ruleShape{nodes, eq(""), anyM, true}},
+	{"n/x/y=z", ruleShape{nodes, eq("x/y"), eq("z"), true}},
 	// wildcards and lists
 	{"*", ruleShape{nwr, anyM, anyM, true}},
 	{"**", ruleShape{nwr, sub(""), anyM, true}},
