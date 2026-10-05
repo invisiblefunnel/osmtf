@@ -19,9 +19,10 @@ import (
 
 // TestOsmiumDifferential writes diffCorpus as an OSM XML file, runs the
 // osmium binary's tags-filter over it for every diffExpressionSets entry, and
-// requires the surviving object IDs to equal what Filter and the combination
-// formula in the package doc give. Sets that do not compile must make osmium
-// fail too.
+// requires the surviving object IDs to equal what Matcher.Matches
+// gives, and every surviving kind to be one CanMatch allows. Sets that do not
+// compile must make osmium fail too. It then does the same for expressions
+// files, read by osmium with -e and here by ReadExpressions.
 func TestOsmiumDifferential(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipped in -short mode")
@@ -53,33 +54,61 @@ func TestOsmiumDifferential(t *testing.T) {
 			tagged++
 		}
 	}
-	if got, err := runOsmium(osmium, file, []string{"*"}); err != nil || len(got) != tagged {
+	if got, err := runOsmium(osmium, file, "", []string{"*"}); err != nil || len(got) != tagged {
 		t.Fatalf(`osmium "*" returned %d objects (err %v), corpus has %d tagged`, len(got), err, tagged)
 	}
 
 	for _, exprs := range diffExpressionSets() {
 		f, err := Compile(exprs...)
-		want, osmErr := runOsmium(osmium, file, exprs)
+		want, osmErr := runOsmium(osmium, file, "", exprs)
+		checkAgainstOsmium(t, fmt.Sprintf("exprs %q", exprs), objs, f, err, want, osmErr)
+	}
+
+	exprFile := filepath.Join(t.TempDir(), "expressions.txt")
+	for _, c := range diffExpressionFiles() {
+		if err := os.WriteFile(exprFile, []byte(c.text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		exprs, err := ReadExpressions(strings.NewReader(c.text))
 		if err != nil {
-			if osmErr == nil || !strings.Contains(osmErr.Error(), "Unknown object type") {
-				t.Errorf("exprs %q: we rejected (%v) but osmium said %v", exprs, err, osmErr)
-			}
-			continue
+			t.Fatalf("ReadExpressions(%q): %v", c.text, err)
 		}
-		if osmErr != nil {
-			t.Fatalf("exprs %q: osmium failed: %v", exprs, osmErr)
+		f, err := Compile(append(exprs, c.cli...)...)
+		want, osmErr := runOsmium(osmium, file, exprFile, c.cli)
+		checkAgainstOsmium(t, fmt.Sprintf("file %q with %q", c.text, c.cli), objs, f, err, want, osmErr)
+	}
+}
+
+// checkAgainstOsmium requires f, with err from compiling what osmium was
+// given, to keep the same objects of objs as osmium did, given its want and
+// osmErr. A compile error is right only when osmium rejected the type letter
+// too.
+func checkAgainstOsmium(t *testing.T, name string, objs []osmObject, f *Filter, err error, want map[string]bool, osmErr error) {
+	t.Helper()
+	if err != nil {
+		if osmErr == nil || !strings.Contains(osmErr.Error(), "Unknown object type") {
+			t.Errorf("%s: we rejected (%v) but osmium said %v", name, err, osmErr)
 		}
-		got := matchLocally(f, objs)
-		if !maps.Equal(got, want) {
-			for id := range want {
-				if !got[id] {
-					t.Errorf("exprs %q: osmium matched %s, we did not", exprs, id)
-				}
+		return
+	}
+	if osmErr != nil {
+		t.Fatalf("%s: osmium failed: %v", name, osmErr)
+	}
+	for id := range want {
+		if kind := Kind(strings.IndexByte("nwr", id[0])); !f.CanMatch(kind) {
+			t.Errorf("%s: osmium matched %s but CanMatch(%v) is false", name, id, kind)
+		}
+	}
+	got := matchLocally(f, objs)
+	if !maps.Equal(got, want) {
+		for id := range want {
+			if !got[id] {
+				t.Errorf("%s: osmium matched %s, we did not", name, id)
 			}
-			for id := range got {
-				if !want[id] {
-					t.Errorf("exprs %q: we matched %s, osmium did not", exprs, id)
-				}
+		}
+		for id := range got {
+			if !want[id] {
+				t.Errorf("%s: we matched %s, osmium did not", name, id)
 			}
 		}
 	}
@@ -138,11 +167,18 @@ func writeOSMXML(w io.Writer, objs []osmObject) error {
 	return bw.Flush()
 }
 
-// runOsmium runs osmium tags-filter -R over file with exprs and returns the
-// first token of every OPL line it prints, which names a kept object: "n1",
-// "w10", "r20". A non-zero exit is an error whose text includes stderr.
-func runOsmium(osmium, file string, exprs []string) (map[string]bool, error) {
-	cmd := exec.Command(osmium, append([]string{"tags-filter", "-R", "-f", "opl", file}, exprs...)...)
+// runOsmium runs osmium tags-filter -R over file with exprs on the command
+// line and, when exprFile is not empty, the expressions file exprFile. It
+// returns the first token of every OPL line osmium prints, which names a
+// kept object: "n1", "w10", "r20". A non-zero exit is an error whose text
+// includes stderr.
+func runOsmium(osmium, file, exprFile string, exprs []string) (map[string]bool, error) {
+	args := []string{"tags-filter", "-R", "-f", "opl"}
+	if exprFile != "" {
+		args = append(args, "-e", exprFile)
+	}
+	args = append(append(args, file), exprs...)
+	cmd := exec.Command(osmium, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
@@ -158,30 +194,26 @@ func runOsmium(osmium, file string, exprs []string) (map[string]bool, error) {
 	return kept, nil
 }
 
-// matchLocally returns the objects f matches, named as runOsmium names them,
-// combining Hits with geometry by the formula in the package doc. Like a
-// decoder, it reads objs in file order and reuses one Matcher, calling Begin
-// per object.
+// matchLocally returns the objects f matches, named as runOsmium names them.
+// Like a decoder, it reads objs in file order, reuses one Matcher, calls
+// the appropriate Begin method per object, then Matches after its tags.
 func matchLocally(f *Filter, objs []osmObject) map[string]bool {
 	matched := map[string]bool{}
 	m := f.Matcher()
 	for _, o := range inFileOrder(objs) {
-		m.Begin(o.kind)
+		switch o.kind {
+		case Node:
+			m.BeginNode()
+		case Way:
+			n := len(o.nodeRefs)
+			m.BeginWay(n, n > 0 && o.nodeRefs[0] == o.nodeRefs[n-1])
+		case Relation:
+			m.BeginRelation()
+		}
 		for _, tag := range o.tags {
 			m.Tag([]byte(tag[0]), []byte(tag[1]))
 		}
-		h := m.Hits()
-		var match bool
-		switch o.kind {
-		case Node:
-			match = h&Nodes != 0
-		case Way:
-			n := len(o.nodeRefs)
-			match = h&Ways != 0 || (h&Areas != 0 && IsAreaWay(n, o.nodeRefs[0] == o.nodeRefs[n-1]))
-		case Relation:
-			match = h&Relations != 0 || (h&Areas != 0 && m.Multipolygon())
-		}
-		if match {
+		if m.Matches() {
 			matched[fmt.Sprintf("%c%d", "nwr"[o.kind], o.id)] = true
 		}
 	}
@@ -218,6 +250,9 @@ func diffCorpus() []osmObject {
 		{kind: Way, id: 13, tags: kv("highway", "primary"), nodeRefs: []int{1, 2, 3, 1}},
 		{kind: Way, id: 14, tags: kv("highway", "primary", "building", "yes"), nodeRefs: []int{1, 2, 3, 4, 1}},
 		{kind: Way, id: 15, nodeRefs: []int{1, 2, 3, 1}},
+		{kind: Way, id: 16, tags: kv("building", "yes", "highway", "residential")},
+		{kind: Way, id: 17, tags: kv("building", "yes"), nodeRefs: []int{1}},
+		{kind: Way, id: 18, tags: kv("building", "yes", "highway", "residential"), nodeRefs: []int{1, 2, 3, 4}},
 		{kind: Relation, id: 20, tags: kv("type", "multipolygon", "building", "yes")},
 		{kind: Relation, id: 21, tags: kv("type", "boundary", "building", "yes")},
 		{kind: Relation, id: 22, tags: kv("type", "route", "building", "yes")},
@@ -276,6 +311,34 @@ func diffCorpus() []osmObject {
 		objs = append(objs, o)
 	}
 	return objs
+}
+
+// diffExpressionFiles returns expressions files, as text, each with the
+// command-line expressions to add to it. They cover what ReadExpressions
+// must get right: comments, including ones that cut an expression, CRLF
+// line ends, lines that still count as an expression once cut, and an
+// invalid type letter.
+func diffExpressionFiles() []struct {
+	text string
+	cli  []string
+} {
+	return []struct {
+		text string
+		cli  []string
+	}{
+		{"", nil},
+		{"# nothing\n", nil},
+		{"# cafes and roads\nn/amenity   # trailing comment\r\n\r\nw/highway=primary\n\nnw/highway\r\na/building", nil},
+		{"x=a#,b\n", nil},      // x=a, not the list x=a,b
+		{"   \n", nil},         // an empty-key rule, as is
+		{"\r\n", nil},          // this one, and
+		{"  # comment\n", nil}, // this one
+		{"n/amenity\r# comment\n", nil},
+		{"amenity\r\r\n", nil}, // the key is "amenity\r", so nothing matches
+		{"n/amenity\n", []string{"w/highway=primary", "a/building"}},
+		{"n/amenity\nx/foo # bad\n", nil},
+		{" n/amenity\n", nil}, // the space is an unknown type letter; nothing is trimmed
+	}
 }
 
 // diffExpressionSets returns hand-picked expression sets, each man page

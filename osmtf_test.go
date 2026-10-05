@@ -8,12 +8,17 @@ import (
 	"unicode/utf8"
 )
 
-func TestTypesAndKindValues(t *testing.T) {
-	if Nodes != 1 || Ways != 2 || Relations != 4 || Areas != 8 {
-		t.Fatalf("Types bits = %d %d %d %d", Nodes, Ways, Relations, Areas)
-	}
+func TestKindValues(t *testing.T) {
 	if Node != 0 || Way != 1 || Relation != 2 {
 		t.Fatalf("Kind values = %d %d %d", Node, Way, Relation)
+	}
+}
+
+func TestKindString(t *testing.T) {
+	for k, want := range map[Kind]string{Node: "Node", Way: "Way", Relation: "Relation", 3: "Kind(3)"} {
+		if got := k.String(); got != want {
+			t.Errorf("Kind(%d).String() = %q, want %q", uint8(k), got, want)
+		}
 	}
 }
 
@@ -25,19 +30,34 @@ func TestParseErrorError(t *testing.T) {
 	}
 }
 
-func TestIsAreaWay(t *testing.T) {
+func TestCanMatch(t *testing.T) {
 	cases := []struct {
-		n            int
-		closed, want bool
+		exprs               []string
+		node, way, relation bool
 	}{
-		{4, true, true}, {5, true, true}, {100, true, true},
-		{3, true, false}, {4, false, false}, {0, false, false}, {0, true, false}, {1, true, false},
+		{nil, false, false, false},
+		{[]string{"n/a"}, true, false, false},
+		{[]string{"w/a"}, false, true, false},
+		{[]string{"r/a"}, false, false, true},
+		{[]string{"a/a"}, false, true, true},
+		{[]string{"wa/a"}, false, true, true},
+		{[]string{"a"}, true, true, true},
+		{[]string{"/a"}, true, true, true},
+		{[]string{"n/a", "r/b"}, true, false, true},
 	}
 	for _, c := range cases {
-		if got := IsAreaWay(c.n, c.closed); got != c.want {
-			t.Errorf("IsAreaWay(%d, %v) = %v, want %v", c.n, c.closed, got, c.want)
+		f := MustCompile(c.exprs...)
+		got := [3]bool{f.CanMatch(Node), f.CanMatch(Way), f.CanMatch(Relation)}
+		if want := [3]bool{c.node, c.way, c.relation}; got != want {
+			t.Errorf("CanMatch for %q = %v, want %v", c.exprs, got, want)
 		}
 	}
+	defer func() {
+		if r := recover(); r != "osmtf: invalid Kind" {
+			t.Fatalf("recovered %v", r)
+		}
+	}()
+	MustCompile("a").CanMatch(Kind(3))
 }
 
 var compileErrorCases = []struct {
@@ -77,7 +97,7 @@ func TestCompileErrors(t *testing.T) {
 }
 
 func TestMustCompile(t *testing.T) {
-	if f := MustCompile("n/amenity"); f == nil || f.Types() != Nodes {
+	if f := MustCompile("n/amenity"); f == nil || f.types != nodes {
 		t.Fatalf("MustCompile returned %v", f)
 	}
 	defer func() {
@@ -93,16 +113,16 @@ func TestCompileIndexes(t *testing.T) {
 	want := Filter{
 		core:  [3][]uint32{{0, 4}, {1, 4, 5}, {2, 4}},
 		area:  []uint32{3, 4, 5},
-		types: Nodes | Ways | Relations | Areas,
+		types: nodes | ways | relations | areas,
 	}
-	if !reflect.DeepEqual(f.core, want.core) || !reflect.DeepEqual(f.area, want.area) || f.Types() != want.types {
-		t.Fatalf("core=%v area=%v types=%d", f.core, f.area, f.Types())
+	if !reflect.DeepEqual(f.core, want.core) || !reflect.DeepEqual(f.area, want.area) || f.types != want.types {
+		t.Fatalf("core=%v area=%v types=%d", f.core, f.area, f.types)
 	}
 	if d := MustCompile("n/a", "n/a"); !reflect.DeepEqual(d.core[Node], []uint32{0, 1}) {
 		t.Fatalf("duplicates: core[Node]=%v", d.core[Node])
 	}
 	e := MustCompile()
-	if e.Types() != 0 || len(e.rules) != 0 || len(e.area) != 0 || len(e.core[Node])+len(e.core[Way])+len(e.core[Relation]) != 0 {
+	if e.types != 0 || len(e.rules) != 0 || len(e.area) != 0 || len(e.core[Node])+len(e.core[Way])+len(e.core[Relation]) != 0 {
 		t.Fatalf("empty filter has rules: %+v", e)
 	}
 }

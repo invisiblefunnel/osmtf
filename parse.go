@@ -26,7 +26,7 @@ type strMatcher struct {
 
 // rule is one compiled expression.
 type rule struct {
-	types Types
+	types ruleTypes
 	key   strMatcher
 	value strMatcher // kind matchAny for key-only rules
 	want  bool       // false when inverted
@@ -85,7 +85,7 @@ func (c *compiler) stringMatcher(raw string) strMatcher {
 // interns its patterns. The only failure is an unknown type letter, which is
 // always reported as a *ParseError.
 func (c *compiler) parseExpr(expr string) (rule, error) {
-	types := Nodes | Ways | Relations
+	types := nodes | ways | relations
 	rest := expr
 	switch p := strings.IndexByte(expr, '/'); {
 	case p == 0:
@@ -95,13 +95,13 @@ func (c *compiler) parseExpr(expr string) (rule, error) {
 		for i := 0; i < p; i++ {
 			switch expr[i] {
 			case 'n':
-				types |= Nodes
+				types |= nodes
 			case 'w':
-				types |= Ways
+				types |= ways
 			case 'r':
-				types |= Relations
+				types |= relations
 			case 'a':
-				types |= Areas
+				types |= areas
 			default:
 				// %c formats the byte as the rune of the same value, so Msg is
 				// valid UTF-8 even for a non-ASCII byte.
